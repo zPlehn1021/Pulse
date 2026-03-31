@@ -38,7 +38,7 @@ COPY --from=builder /app/public ./public
 RUN mkdir -p /app/data
 
 # Cron job: refresh every 5 minutes
-RUN echo "*/5 * * * * curl -sf http://localhost:3000/api/cron/refresh -H \"Authorization: Bearer \${CRON_SECRET}\" > /dev/null 2>&1" > /app/crontab
+RUN echo "*/5 * * * * curl -sf --max-time 180 http://localhost:3000/api/cron/refresh -H \"Authorization: Bearer \${CRON_SECRET}\" > /dev/null 2>&1" > /app/crontab
 
 # Start script: runs both the Next.js server and the cron scheduler
 RUN printf '#!/bin/sh\n\

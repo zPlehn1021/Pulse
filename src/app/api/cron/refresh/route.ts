@@ -32,6 +32,9 @@ const adapters: PlatformAdapter[] = [
 
 export const dynamic = "force-dynamic";
 
+// Hard timeout for the entire refresh cycle (2 minutes)
+const REFRESH_TIMEOUT_MS = 120_000;
+
 async function handleRefresh(request: Request) {
   // Verify cron secret
   const authHeader = request.headers.get("authorization");
@@ -45,13 +48,19 @@ async function handleRefresh(request: Request) {
   const results: Record<string, { count: number; error?: string }> = {};
   const allMarkets: NormalizedMarket[] = [];
 
-  // Fetch from all platforms in parallel
+  // Fetch from all platforms in parallel, with per-platform timeout
+  const PLATFORM_TIMEOUT_MS = 60_000; // 60s per platform
   const fetches = await Promise.allSettled(
     adapters.map(async (adapter) => {
       if (!shouldAttemptRecovery(adapter.platform)) {
-        return { platform: adapter.platform, markets: [], skipped: true };
+        return { platform: adapter.platform, markets: [] as NormalizedMarket[], skipped: true };
       }
-      const markets = await adapter.fetchMarkets();
+      const markets = await Promise.race([
+        adapter.fetchMarkets(),
+        new Promise<NormalizedMarket[]>((_, reject) =>
+          setTimeout(() => reject(new Error(`${adapter.platform} timed out after ${PLATFORM_TIMEOUT_MS / 1000}s`)), PLATFORM_TIMEOUT_MS),
+        ),
+      ]);
       return { platform: adapter.platform, markets, skipped: false };
     }),
   );

@@ -92,11 +92,22 @@ export async function fetchOrThrow(
   url: string,
   init?: RequestInit,
 ): Promise<Response> {
-  const res = await fetch(url, init);
-  if (res.ok) return res;
+  // 30-second timeout per request to prevent hanging connections
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
 
-  const retryAfter = parseInt(res.headers.get("Retry-After") || "0", 10);
-  throw new RetryableError(res.status, res.statusText, retryAfter);
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (res.ok) return res;
+
+    const retryAfter = parseInt(res.headers.get("Retry-After") || "0", 10);
+    throw new RetryableError(res.status, res.statusText, retryAfter);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function sleep(ms: number): Promise<void> {
