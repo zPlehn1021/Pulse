@@ -1,65 +1,215 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
+import { useSentiment } from "@/hooks/useSentiment";
+import { useAutoRefresh } from "@/hooks/useAutoRefresh";
+import { CompositeGauge } from "@/components/dashboard/CompositeGauge";
+import { CategoryCard } from "@/components/dashboard/CategoryCard";
+import { DivergencePanel } from "@/components/dashboard/DivergencePanel";
+import { GlobalTopMarkets } from "@/components/dashboard/GlobalTopMarkets";
+import type { CategoryId } from "@/lib/platforms/types";
+
+type Tab = "dashboard" | "sources" | "business";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "dashboard", label: "Dashboard" },
+  { id: "sources", label: "Sources" },
+  { id: "business", label: "Business Model" },
+];
 
 export default function Home() {
+  const {
+    index,
+    history,
+    totalMarkets,
+    platformStatus,
+    isLoading,
+    isError,
+    isStale,
+  } = useSentiment();
+
+  const { secondsSinceRefresh } = useAutoRefresh(index?.timestamp ?? null);
+
+  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
+  const [expandedCategory, setExpandedCategory] = useState<CategoryId | null>(
+    null,
+  );
+
+  const platformCount = Object.values(platformStatus).filter(
+    (p) => p.available,
+  ).length || 5;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+      {/* Tab navigation */}
+      <nav className="mb-6 flex gap-1 border-b border-border-pulse">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors ${
+              activeTab === tab.id
+                ? "border-b-2 border-pulse-blue text-white"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+            style={{ fontFamily: "var(--font-jetbrains-mono)" }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* Error banner */}
+      {isError && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/5 px-4 py-2.5 text-sm text-rose-400">
+          <span>Failed to refresh data.</span>
+          {isStale && (
+            <span className="text-rose-500/70">
+              Showing data from {secondsSinceRefresh}s ago.
+            </span>
+          )}
+        </div>
+      )}
+
+      {activeTab === "dashboard" && (
+        <>
+          {isLoading ? (
+            <LoadingSkeleton platformCount={platformCount} />
+          ) : (
+            <div className="grid gap-6 lg:grid-cols-3">
+              {/* Left column: composite + categories */}
+              <div className="space-y-6 lg:col-span-2">
+                <CompositeGauge index={index} history={history} />
+
+                {/* Divergences (inline, above categories) */}
+                <DivergencePanel divergences={index?.divergences ?? []} />
+
+                {/* Category grid */}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {index?.categories.map((cat) => (
+                    <CategoryCard
+                      key={cat.category}
+                      category={cat}
+                      expanded={expandedCategory === cat.category}
+                      onToggle={() =>
+                        setExpandedCategory(
+                          expandedCategory === cat.category
+                            ? null
+                            : cat.category,
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Right column: top markets */}
+              <div className="space-y-6">
+                <GlobalTopMarkets />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {activeTab === "sources" && <SourcesPlaceholder />}
+      {activeTab === "business" && <BusinessModelPlaceholder />}
+    </div>
+  );
+}
+
+/* ── Loading skeleton ── */
+function LoadingSkeleton({ platformCount }: { platformCount: number }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-20">
+      {/* Spinner */}
+      <div className="relative h-12 w-12">
+        <div
+          className="absolute inset-0 animate-spin rounded-full border-2 border-transparent"
+          style={{
+            borderTopColor: "var(--pulse-blue)",
+            borderRightColor: "var(--pulse-cyan)",
+          }}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+      </div>
+      <p
+        className="mt-4 text-sm text-zinc-500"
+        style={{ fontFamily: "var(--font-jetbrains-mono)" }}
+      >
+        Aggregating from {platformCount} platforms...
+      </p>
+    </div>
+  );
+}
+
+/* ── Placeholder pages ── */
+function SourcesPlaceholder() {
+  return (
+    <div className="card p-8 text-center">
+      <h2
+        className="text-lg font-medium text-zinc-300"
+        style={{ fontFamily: "var(--font-space-mono)" }}
+      >
+        Data Sources
+      </h2>
+      <p className="mt-2 text-sm text-zinc-500">
+        Detailed platform status, health metrics, and individual market feeds.
+      </p>
+      <div className="mx-auto mt-6 grid max-w-md gap-3">
+        {["Polymarket", "Kalshi", "Manifold", "PredictIt", "Fear & Greed Index"].map(
+          (name) => (
+            <div
+              key={name}
+              className="flex items-center justify-between rounded-lg bg-surface-2 px-4 py-3"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              <span className="text-sm text-zinc-300">{name}</span>
+              <span
+                className="text-xs text-zinc-600"
+                style={{ fontFamily: "var(--font-jetbrains-mono)" }}
+              >
+                Coming soon
+              </span>
+            </div>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BusinessModelPlaceholder() {
+  return (
+    <div className="card p-8 text-center">
+      <h2
+        className="text-lg font-medium text-zinc-300"
+        style={{ fontFamily: "var(--font-space-mono)" }}
+      >
+        Business Model
+      </h2>
+      <p className="mt-2 text-sm text-zinc-500">
+        Monetization strategy, tier comparison, and growth roadmap.
+      </p>
+      <div className="mx-auto mt-6 grid max-w-lg gap-3 sm:grid-cols-3">
+        {[
+          { tier: "Free", price: "$0", desc: "5-min delayed data" },
+          { tier: "Pro", price: "$29/mo", desc: "Real-time + alerts" },
+          { tier: "Enterprise", price: "Custom", desc: "API + white-label" },
+        ].map((plan) => (
+          <div
+            key={plan.tier}
+            className="rounded-lg border border-border-pulse bg-surface-2 p-4"
+          >
+            <p className="text-sm font-medium text-zinc-200">{plan.tier}</p>
+            <p
+              className="mt-1 text-lg font-bold text-white"
+              style={{ fontFamily: "var(--font-jetbrains-mono)" }}
             >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+              {plan.price}
+            </p>
+            <p className="mt-1 text-xs text-zinc-500">{plan.desc}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

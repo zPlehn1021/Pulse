@@ -1,0 +1,16 @@
+services:
+  pulse:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist SQLite database across container restarts
+      - pulse-data:/app/data
+    env_file:
+      - .env.local
+    environment:
+      - DATABASE_PATH=/app/data/pulse.db
+    restart: unless-stopped
+
+volumes:
+  pulse-data:

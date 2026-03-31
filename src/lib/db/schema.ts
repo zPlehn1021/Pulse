@@ -1,0 +1,78 @@
+export const SCHEMA = `
+CREATE TABLE IF NOT EXISTS markets (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL,
+  question TEXT NOT NULL,
+  category TEXT NOT NULL,
+  yes_price REAL NOT NULL,
+  volume_24h REAL DEFAULT 0,
+  liquidity REAL DEFAULT 0,
+  last_updated TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  resolution TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_markets_platform ON markets(platform);
+CREATE INDEX IF NOT EXISTS idx_markets_category ON markets(category);
+CREATE INDEX IF NOT EXISTS idx_markets_volume ON markets(volume_24h DESC);
+
+CREATE TABLE IF NOT EXISTS snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  composite_score REAL,
+  composite_certainty REAL,
+  composite_conviction REAL,
+  total_markets INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS category_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id INTEGER REFERENCES snapshots(id),
+  category TEXT NOT NULL,
+  score REAL,
+  uncertainty REAL,
+  conviction REAL,
+  market_count INTEGER,
+  platform_breakdown TEXT
+);
+
+CREATE TABLE IF NOT EXISTS divergence_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id INTEGER REFERENCES snapshots(id),
+  category TEXT,
+  spread REAL,
+  high_platform TEXT,
+  high_score REAL,
+  low_platform TEXT,
+  low_score REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON snapshots(timestamp);
+CREATE INDEX IF NOT EXISTS idx_cat_snap ON category_snapshots(snapshot_id);
+
+-- Per-market price snapshots for momentum / volatility calculation
+CREATE TABLE IF NOT EXISTS market_prices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  market_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  category TEXT NOT NULL,
+  yes_price REAL NOT NULL,
+  volume_24h REAL DEFAULT 0,
+  recorded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mp_market ON market_prices(market_id);
+CREATE INDEX IF NOT EXISTS idx_mp_recorded ON market_prices(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_mp_category ON market_prices(category);
+
+-- AI-generated narrative cache
+CREATE TABLE IF NOT EXISTS narratives (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id INTEGER REFERENCES snapshots(id),
+  category TEXT,
+  narrative TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_narratives_snap ON narratives(snapshot_id);
+`;
