@@ -8,11 +8,13 @@
     "start": "next start",
     "lint": "eslint",
     "test:pipeline": "npx tsx scripts/test-pipeline.ts",
-    "test:apis": "npx tsx scripts/test-apis.ts"
+    "test:apis": "npx tsx scripts/test-apis.ts",
+    "backfill:sentiment": "npx tsx scripts/backfill-sentiment.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
     "better-sqlite3": "^12.8.0",
+    "google-trends-api": "^4.9.2",
     "next": "16.2.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",

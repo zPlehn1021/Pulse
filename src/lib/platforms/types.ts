@@ -170,6 +170,65 @@ export interface CompositeIndex {
 
   /** Top-level AI briefing across all categories */
   narrative: string | null;
+
+  /** v2: Signal layers from external data sources (FRED, etc.) */
+  signalLayers?: SignalLayersData | null;
+
+  /** v2: Cross-layer signal tensions (disagreements between signal layers) */
+  tensions?: SignalTension[];
+}
+
+/**
+ * v2: Multi-source signal layer data included in CompositeIndex.
+ */
+export interface SignalLayersData {
+  predictionMarkets: {
+    momentum: number;
+    confidence: number;
+    marketCount: number;
+  };
+  economicPsychology: {
+    consumerSentiment: number | null;
+    consumerSentimentTrend: "rising" | "falling" | "stable";
+    expectationsVsPresent: number | null;
+    unemploymentRate: number | null;
+    joblessClaimsTrend: "rising" | "falling" | "stable";
+    retailSalesTrend: "rising" | "falling" | "stable";
+    savingsRate: number | null;
+    confidence: number;
+  };
+  fearSignals: {
+    composite: number;
+    vix: number | null;
+    vixLevel: "low" | "moderate" | "elevated" | "extreme";
+    yieldCurveSpread: number | null;
+    yieldCurveInverted: boolean;
+    goldTrend: "rising" | "falling" | "stable";
+    confidence: number;
+  };
+  attention: {
+    publicAwareness: number;
+    topTerms: string[];
+    attentionMarketGap: number;
+    confidence: number;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cross-layer signal tensions
+// ---------------------------------------------------------------------------
+
+export interface SignalTension {
+  /** Human-readable description of the tension */
+  description: string;
+  /** How significant is this disagreement? */
+  severity: "low" | "medium" | "high";
+  /** Which signal layers are in tension */
+  layers: string[];
+  /** Which category this applies to, or 'cross-category' */
+  category: CategoryId | "cross-category";
+  /** AI-generated interpretation (filled in by narrative generation) */
+  implication: string | null;
 }
 
 // ---------------------------------------------------------------------------

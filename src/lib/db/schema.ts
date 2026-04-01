@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS markets (
   liquidity REAL DEFAULT 0,
   last_updated TEXT NOT NULL,
   source_url TEXT NOT NULL,
-  resolution TEXT
+  resolution TEXT,
+  sentiment_direction TEXT,
+  classified_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_markets_platform ON markets(platform);
@@ -75,4 +77,76 @@ CREATE TABLE IF NOT EXISTS narratives (
 );
 
 CREATE INDEX IF NOT EXISTS idx_narratives_snap ON narratives(snapshot_id);
+
+-- External signal readings (FRED, Google Trends, computed composites)
+CREATE TABLE IF NOT EXISTS signal_readings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  signal_source TEXT NOT NULL,
+  signal_id TEXT NOT NULL,
+  signal_name TEXT NOT NULL,
+  category TEXT,
+  value REAL NOT NULL,
+  previous_value REAL,
+  unit TEXT,
+  recorded_at TEXT NOT NULL,
+  metadata TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_signals_source ON signal_readings(signal_source);
+CREATE INDEX IF NOT EXISTS idx_signals_id ON signal_readings(signal_id);
+CREATE INDEX IF NOT EXISTS idx_signals_recorded ON signal_readings(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_signals_category ON signal_readings(category);
+
+-- AI-curated attention terms (Google Trends)
+CREATE TABLE IF NOT EXISTS attention_terms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  term TEXT NOT NULL,
+  category TEXT NOT NULL,
+  generated_reason TEXT,
+  generated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  trend_value REAL,
+  trend_fetched_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_attention_category ON attention_terms(category);
+CREATE INDEX IF NOT EXISTS idx_attention_expires ON attention_terms(expires_at);
+
+-- Resolution records: what every signal said vs. what actually happened
+CREATE TABLE IF NOT EXISTS resolutions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+  -- What resolved
+  market_id TEXT,
+  event_type TEXT NOT NULL,
+  event_description TEXT NOT NULL,
+  category TEXT NOT NULL,
+
+  -- What actually happened
+  outcome TEXT NOT NULL,
+  resolved_at TEXT NOT NULL,
+
+  -- Signal snapshots at key intervals before resolution (JSON blobs)
+  signals_30d TEXT,
+  signals_7d TEXT,
+  signals_1d TEXT,
+  signals_at_resolution TEXT,
+
+  -- Scoring
+  prediction_market_correct INTEGER,
+  pm_confidence_at_close REAL,
+  consumer_sentiment_direction TEXT,
+  fear_signals_direction TEXT,
+  attention_level TEXT,
+
+  -- AI retrospective
+  ai_retrospective TEXT,
+
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resolutions_category ON resolutions(category);
+CREATE INDEX IF NOT EXISTS idx_resolutions_type ON resolutions(event_type);
+CREATE INDEX IF NOT EXISTS idx_resolutions_date ON resolutions(resolved_at);
+CREATE INDEX IF NOT EXISTS idx_resolutions_market ON resolutions(market_id);
 `;

@@ -10,6 +10,16 @@ services:
       - .env.local
     environment:
       - DATABASE_PATH=/app/data/pulse.db
+      # Required env vars (set in .env.local):
+      #   FRED_API_KEY        — Federal Reserve Economic Data API key
+      #   ANTHROPIC_API_KEY   — Claude API key for narratives, classification, curation
+      #   CRON_SECRET         — Secret for authenticating cron refresh requests
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
 volumes:

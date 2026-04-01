@@ -3,16 +3,22 @@
 import { useState } from "react";
 import { useSentiment } from "@/hooks/useSentiment";
 import { useAutoRefresh } from "@/hooks/useAutoRefresh";
-import { CompositeGauge } from "@/components/dashboard/CompositeGauge";
+import { SignalQuadrants } from "@/components/dashboard/SignalQuadrants";
+import { TensionPanel } from "@/components/dashboard/TensionPanel";
+import { AIBriefing } from "@/components/dashboard/AIBriefing";
 import { CategoryCard } from "@/components/dashboard/CategoryCard";
 import { DivergencePanel } from "@/components/dashboard/DivergencePanel";
 import { GlobalTopMarkets } from "@/components/dashboard/GlobalTopMarkets";
+import { SignalDeepDive } from "@/components/dashboard/SignalDeepDive";
+import { TrackRecord } from "@/components/dashboard/TrackRecord";
 import type { CategoryId } from "@/lib/platforms/types";
 
-type Tab = "dashboard" | "sources" | "business";
+type Tab = "dashboard" | "signals" | "track-record" | "sources" | "business";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "signals", label: "Signal Deep-Dive" },
+  { id: "track-record", label: "Track Record" },
   { id: "sources", label: "Sources" },
   { id: "business", label: "Business Model" },
 ];
@@ -20,7 +26,6 @@ const TABS: { id: Tab; label: string }[] = [
 export default function Home() {
   const {
     index,
-    history,
     totalMarkets,
     platformStatus,
     isLoading,
@@ -42,12 +47,12 @@ export default function Home() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
       {/* Tab navigation */}
-      <nav className="mb-6 flex gap-1 border-b border-border-pulse">
+      <nav className="mb-6 flex gap-1 overflow-x-auto border-b border-border-pulse">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors ${
+            className={`shrink-0 px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors ${
               activeTab === tab.id
                 ? "border-b-2 border-pulse-blue text-white"
                 : "text-zinc-500 hover:text-zinc-300"
@@ -76,53 +81,61 @@ export default function Home() {
           {isLoading ? (
             <LoadingSkeleton platformCount={platformCount} />
           ) : (
-            <div className="grid gap-6 lg:grid-cols-3">
-              {/* Left column: composite + categories */}
-              <div className="space-y-6 lg:col-span-2">
-                <CompositeGauge index={index} history={history} />
+            <div className="space-y-6">
+              {/* Hero: The 4 signal quadrants */}
+              <SignalQuadrants signals={index?.signalLayers} />
 
-                {/* Divergences (inline, above categories) */}
-                <DivergencePanel divergences={index?.divergences ?? []} />
+              {/* Signal tensions */}
+              <TensionPanel tensions={index?.tensions ?? []} />
 
-                {/* Category grid */}
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {index?.categories.map((cat) => (
-                    <CategoryCard
-                      key={cat.category}
-                      category={cat}
-                      expanded={expandedCategory === cat.category}
-                      onToggle={() =>
-                        setExpandedCategory(
-                          expandedCategory === cat.category
-                            ? null
-                            : cat.category,
-                        )
-                      }
-                    />
-                  ))}
+              {/* AI Briefing */}
+              <AIBriefing narrative={index?.narrative} />
+
+              {/* Category cards + Top markets side-by-side */}
+              <div className="grid gap-6 lg:grid-cols-3">
+                <div className="space-y-6 lg:col-span-2">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {index?.categories.map((cat) => (
+                      <CategoryCard
+                        key={cat.category}
+                        category={cat}
+                        expanded={expandedCategory === cat.category}
+                        onToggle={() =>
+                          setExpandedCategory(
+                            expandedCategory === cat.category
+                              ? null
+                              : cat.category,
+                          )
+                        }
+                      />
+                    ))}
+                  </div>
+
+                  {/* Cross-community disagreements */}
+                  <DivergencePanel divergences={index?.divergences ?? []} />
                 </div>
-              </div>
 
-              {/* Right column: top markets */}
-              <div className="space-y-6">
-                <GlobalTopMarkets />
+                <div className="space-y-6">
+                  <GlobalTopMarkets />
+                </div>
               </div>
             </div>
           )}
         </>
       )}
 
+      {activeTab === "signals" && <SignalDeepDive />}
+      {activeTab === "track-record" && <TrackRecord />}
       {activeTab === "sources" && <SourcesPlaceholder />}
       {activeTab === "business" && <BusinessModelPlaceholder />}
     </div>
   );
 }
 
-/* ── Loading skeleton ── */
+/* -- Loading skeleton -- */
 function LoadingSkeleton({ platformCount }: { platformCount: number }) {
   return (
     <div className="flex flex-col items-center justify-center py-20">
-      {/* Spinner */}
       <div className="relative h-12 w-12">
         <div
           className="absolute inset-0 animate-spin rounded-full border-2 border-transparent"
@@ -142,7 +155,7 @@ function LoadingSkeleton({ platformCount }: { platformCount: number }) {
   );
 }
 
-/* ── Placeholder pages ── */
+/* -- Placeholder pages -- */
 function SourcesPlaceholder() {
   return (
     <div className="card p-8 text-center">
@@ -156,7 +169,7 @@ function SourcesPlaceholder() {
         Detailed platform status, health metrics, and individual market feeds.
       </p>
       <div className="mx-auto mt-6 grid max-w-md gap-3">
-        {["Polymarket", "Kalshi", "Manifold", "PredictIt", "Fear & Greed Index"].map(
+        {["Polymarket", "Kalshi", "Manifold", "PredictIt", "Fear & Greed Index", "FRED (Federal Reserve)", "Google Trends (AI-Curated)"].map(
           (name) => (
             <div
               key={name}

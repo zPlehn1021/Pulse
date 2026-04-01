@@ -38,14 +38,22 @@ COPY --from=builder /app/public ./public
 RUN mkdir -p /app/data
 
 # Cron job: refresh every 5 minutes
-RUN echo "*/5 * * * * curl -sf --max-time 180 http://localhost:3000/api/cron/refresh -H \"Authorization: Bearer \${CRON_SECRET}\" > /dev/null 2>&1" > /app/crontab
+RUN echo "*/5 * * * * curl -sf --max-time 180 -o /dev/null -w 'CRON refresh: HTTP %{http_code} in %{time_total}s\n' http://localhost:3000/api/cron/refresh -H \"Authorization: Bearer \${CRON_SECRET}\"" > /app/crontab
 
 # Start script: runs both the Next.js server and the cron scheduler
 RUN printf '#!/bin/sh\n\
-echo "Starting PULSE..."\n\
+echo "Starting PULSE v2 — Unified Societal Sentiment Engine"\n\
 echo "  → Next.js server on port 3000"\n\
-echo "  → Cron refresh every 5 minutes"\n\
-echo "  → AI narratives every 1 hour"\n\
+echo "  → Cron refresh every 5 minutes (markets, classification, resolution)"\n\
+echo "  → Hourly: FRED data, AI term curation, Google Trends, narratives"\n\
+echo "  → Health: http://localhost:3000/api/health"\n\
+echo ""\n\
+echo "Signal layers:"\n\
+echo "  1. Prediction Markets (Polymarket, Kalshi, Manifold, PredictIt)"\n\
+echo "  2. Economic Psychology (FRED: consumer sentiment, unemployment, etc.)"\n\
+echo "  3. Fear Signals (FRED: VIX, yield curve, credit spreads)"\n\
+echo "  4. Public Attention (AI-curated Google Trends)"\n\
+echo ""\n\
 \n\
 # Start cron in background\n\
 supercronic /app/crontab &\n\

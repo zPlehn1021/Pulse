@@ -20,8 +20,26 @@ export function getDb(): Database.Database {
     _db = new Database(dbPath);
     _db.pragma("journal_mode = WAL");
     _db.exec(SCHEMA);
+    runMigrations(_db);
   }
   return _db;
+}
+
+/**
+ * Run incremental migrations for schema changes that ALTER existing tables.
+ * Each migration checks if it's already been applied before running.
+ */
+function runMigrations(db: Database.Database): void {
+  // v2 Phase 1: Add sentiment_direction columns to markets table
+  const columns = db.prepare("PRAGMA table_info(markets)").all() as { name: string }[];
+  const columnNames = columns.map((c) => c.name);
+
+  if (!columnNames.includes("sentiment_direction")) {
+    db.exec("ALTER TABLE markets ADD COLUMN sentiment_direction TEXT");
+  }
+  if (!columnNames.includes("classified_at")) {
+    db.exec("ALTER TABLE markets ADD COLUMN classified_at TEXT");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -30,13 +48,25 @@ export function getDb(): Database.Database {
 
 export function upsertMarkets(markets: NormalizedMarket[]): void {
   const db = getDb();
+  // Use INSERT ... ON CONFLICT to preserve sentiment_direction/classified_at
+  // that were set by the classifier (adapters don't provide these fields)
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO markets
+    INSERT INTO markets
       (id, platform, question, category, yes_price,
        volume_24h, liquidity, last_updated, source_url, resolution)
     VALUES
       (@id, @platform, @question, @category, @yesPrice,
        @volume24h, @liquidity, @lastUpdated, @sourceUrl, @resolution)
+    ON CONFLICT(id) DO UPDATE SET
+      platform = excluded.platform,
+      question = excluded.question,
+      category = excluded.category,
+      yes_price = excluded.yes_price,
+      volume_24h = excluded.volume_24h,
+      liquidity = excluded.liquidity,
+      last_updated = excluded.last_updated,
+      source_url = excluded.source_url,
+      resolution = excluded.resolution
   `);
 
   const upsertMany = db.transaction((items: NormalizedMarket[]) => {
@@ -85,6 +115,84 @@ function hydrateMarketRow(row: Record<string, unknown>): NormalizedMarket {
     sourceUrl: row.source_url as string,
     resolution: (row.resolution as "yes" | "no" | null) ?? undefined,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Sentiment direction classification
+// ---------------------------------------------------------------------------
+
+export type SentimentDirection = "positive" | "negative" | "neutral";
+
+/**
+ * Get markets that haven't been classified for sentiment direction yet.
+ * Only returns non-resolved, non-feargreed markets.
+ */
+export function getUnclassifiedMarkets(): { id: string; question: string }[] {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT id, question FROM markets
+       WHERE sentiment_direction IS NULL
+         AND platform != 'feargreed'
+         AND resolution IS NULL
+       ORDER BY volume_24h DESC`,
+    )
+    .all() as { id: string; question: string }[];
+}
+
+/**
+ * Save sentiment direction classifications for a batch of markets.
+ */
+export function saveSentimentClassifications(
+  classifications: { id: string; direction: SentimentDirection }[],
+): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const stmt = db.prepare(
+    `UPDATE markets SET sentiment_direction = ?, classified_at = ? WHERE id = ?`,
+  );
+  const updateMany = db.transaction(
+    (items: { id: string; direction: SentimentDirection }[]) => {
+      for (const item of items) {
+        stmt.run(item.direction, now, item.id);
+      }
+    },
+  );
+  updateMany(classifications);
+}
+
+/**
+ * Get sentiment direction for a market by ID.
+ */
+export function getMarketSentimentDirection(
+  marketId: string,
+): SentimentDirection | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT sentiment_direction FROM markets WHERE id = ?")
+    .get(marketId) as { sentiment_direction: string | null } | undefined;
+  return (row?.sentiment_direction as SentimentDirection) ?? null;
+}
+
+/**
+ * Batch-fetch sentiment directions for all markets in a category.
+ */
+export function getCategorySentimentDirections(
+  category: CategoryId,
+): Map<string, SentimentDirection> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT id, sentiment_direction FROM markets
+       WHERE category = ? AND sentiment_direction IS NOT NULL`,
+    )
+    .all(category) as { id: string; sentiment_direction: string }[];
+
+  const result = new Map<string, SentimentDirection>();
+  for (const row of rows) {
+    result.set(row.id, row.sentiment_direction as SentimentDirection);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +345,495 @@ export function pruneOldPrices(hoursToKeep = 48): void {
     Date.now() - hoursToKeep * 60 * 60 * 1000,
   ).toISOString();
   db.prepare("DELETE FROM market_prices WHERE recorded_at < ?").run(cutoff);
+}
+
+// ---------------------------------------------------------------------------
+// Signal readings (FRED, Google Trends, computed composites)
+// ---------------------------------------------------------------------------
+
+export interface SignalReading {
+  signalSource: string;
+  signalId: string;
+  signalName: string;
+  category: string | null;
+  value: number;
+  previousValue: number | null;
+  unit: string | null;
+  recordedAt: string;
+  metadata: Record<string, unknown> | null;
+}
+
+/**
+ * Save a batch of signal readings.
+ */
+export function saveSignalReadings(readings: SignalReading[]): void {
+  const db = getDb();
+  const stmt = db.prepare(`
+    INSERT INTO signal_readings
+      (signal_source, signal_id, signal_name, category, value,
+       previous_value, unit, recorded_at, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertMany = db.transaction((items: SignalReading[]) => {
+    for (const r of items) {
+      stmt.run(
+        r.signalSource,
+        r.signalId,
+        r.signalName,
+        r.category,
+        r.value,
+        r.previousValue,
+        r.unit,
+        r.recordedAt,
+        r.metadata ? JSON.stringify(r.metadata) : null,
+      );
+    }
+  });
+  insertMany(readings);
+}
+
+/**
+ * Get the latest reading for a specific signal.
+ */
+export function getLatestSignalReading(
+  signalId: string,
+): SignalReading | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT * FROM signal_readings
+       WHERE signal_id = ?
+       ORDER BY recorded_at DESC LIMIT 1`,
+    )
+    .get(signalId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return hydrateSignalRow(row);
+}
+
+/**
+ * Get the latest readings for all signals from a given source.
+ */
+export function getLatestSignalsBySource(
+  source: string,
+): SignalReading[] {
+  const db = getDb();
+  // Get the most recent reading per signal_id for this source
+  const rows = db
+    .prepare(
+      `SELECT sr.* FROM signal_readings sr
+       INNER JOIN (
+         SELECT signal_id, MAX(recorded_at) as max_recorded
+         FROM signal_readings
+         WHERE signal_source = ?
+         GROUP BY signal_id
+       ) latest ON sr.signal_id = latest.signal_id
+         AND sr.recorded_at = latest.max_recorded
+       WHERE sr.signal_source = ?`,
+    )
+    .all(source, source) as Record<string, unknown>[];
+  return rows.map(hydrateSignalRow);
+}
+
+/**
+ * Get the age of the latest reading for a signal source (ms since last reading).
+ */
+export function getSignalSourceAge(source: string): number | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT MAX(recorded_at) as latest FROM signal_readings WHERE signal_source = ?`,
+    )
+    .get(source) as { latest: string | null } | undefined;
+  if (!row?.latest) return null;
+  return Date.now() - new Date(row.latest).getTime();
+}
+
+/**
+ * Get all latest signal readings across all sources.
+ */
+export function getAllLatestSignals(): SignalReading[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT sr.* FROM signal_readings sr
+       INNER JOIN (
+         SELECT signal_id, MAX(recorded_at) as max_recorded
+         FROM signal_readings
+         GROUP BY signal_id
+       ) latest ON sr.signal_id = latest.signal_id
+         AND sr.recorded_at = latest.max_recorded`,
+    )
+    .all() as Record<string, unknown>[];
+  return rows.map(hydrateSignalRow);
+}
+
+function hydrateSignalRow(row: Record<string, unknown>): SignalReading {
+  return {
+    signalSource: row.signal_source as string,
+    signalId: row.signal_id as string,
+    signalName: row.signal_name as string,
+    category: (row.category as string) ?? null,
+    value: row.value as number,
+    previousValue: (row.previous_value as number) ?? null,
+    unit: (row.unit as string) ?? null,
+    recordedAt: row.recorded_at as string,
+    metadata: row.metadata ? JSON.parse(row.metadata as string) : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Attention terms (AI-curated Google Trends)
+// ---------------------------------------------------------------------------
+
+export interface AttentionTerm {
+  id?: number;
+  term: string;
+  category: string;
+  generatedReason: string | null;
+  generatedAt: string;
+  expiresAt: string;
+  trendValue: number | null;
+  trendFetchedAt: string | null;
+}
+
+/**
+ * Save a batch of AI-curated attention terms.
+ */
+export function saveAttentionTerms(terms: AttentionTerm[]): void {
+  const db = getDb();
+  const stmt = db.prepare(`
+    INSERT INTO attention_terms
+      (term, category, generated_reason, generated_at, expires_at, trend_value, trend_fetched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertMany = db.transaction((items: AttentionTerm[]) => {
+    for (const t of items) {
+      stmt.run(
+        t.term,
+        t.category,
+        t.generatedReason,
+        t.generatedAt,
+        t.expiresAt,
+        t.trendValue,
+        t.trendFetchedAt,
+      );
+    }
+  });
+  insertMany(terms);
+}
+
+/**
+ * Get active (non-expired) attention terms.
+ */
+export function getActiveAttentionTerms(): AttentionTerm[] {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const rows = db
+    .prepare(
+      `SELECT * FROM attention_terms
+       WHERE expires_at > ?
+       ORDER BY generated_at DESC`,
+    )
+    .all(now) as Record<string, unknown>[];
+  return rows.map(hydrateAttentionRow);
+}
+
+/**
+ * Get the latest batch of attention terms (regardless of expiration).
+ */
+export function getLatestAttentionTerms(): AttentionTerm[] {
+  const db = getDb();
+  // Get the most recent generated_at and return all terms from that batch
+  const latestRow = db
+    .prepare(
+      `SELECT generated_at FROM attention_terms ORDER BY generated_at DESC LIMIT 1`,
+    )
+    .get() as { generated_at: string } | undefined;
+  if (!latestRow) return [];
+
+  const rows = db
+    .prepare(`SELECT * FROM attention_terms WHERE generated_at = ?`)
+    .all(latestRow.generated_at) as Record<string, unknown>[];
+  return rows.map(hydrateAttentionRow);
+}
+
+/**
+ * Update trend values for attention terms by ID.
+ */
+export function updateAttentionTrendValues(
+  updates: { id: number; trendValue: number }[],
+): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const stmt = db.prepare(
+    `UPDATE attention_terms SET trend_value = ?, trend_fetched_at = ? WHERE id = ?`,
+  );
+  const updateMany = db.transaction(
+    (items: { id: number; trendValue: number }[]) => {
+      for (const item of items) {
+        stmt.run(item.trendValue, now, item.id);
+      }
+    },
+  );
+  updateMany(updates);
+}
+
+/**
+ * Get the age of the latest attention term generation (ms).
+ */
+export function getAttentionTermsAge(): number | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT MAX(generated_at) as latest FROM attention_terms`,
+    )
+    .get() as { latest: string | null } | undefined;
+  if (!row?.latest) return null;
+  return Date.now() - new Date(row.latest).getTime();
+}
+
+/**
+ * Clean up expired attention terms older than the given hours.
+ */
+export function pruneExpiredAttentionTerms(hoursOld = 72): void {
+  const db = getDb();
+  const cutoff = new Date(
+    Date.now() - hoursOld * 60 * 60 * 1000,
+  ).toISOString();
+  db.prepare("DELETE FROM attention_terms WHERE expires_at < ?").run(cutoff);
+}
+
+// ---------------------------------------------------------------------------
+// Resolutions (prediction vs. outcome tracking)
+// ---------------------------------------------------------------------------
+
+export interface ResolutionRecord {
+  id?: number;
+  marketId: string | null;
+  eventType: "market_resolution" | "economic_release" | "geopolitical_event";
+  eventDescription: string;
+  category: string;
+  outcome: string;
+  resolvedAt: string;
+  signals30d: string | null;
+  signals7d: string | null;
+  signals1d: string | null;
+  signalsAtResolution: string | null;
+  predictionMarketCorrect: number | null;
+  pmConfidenceAtClose: number | null;
+  consumerSentimentDirection: string | null;
+  fearSignalsDirection: string | null;
+  attentionLevel: string | null;
+  aiRetrospective: string | null;
+  createdAt: string;
+}
+
+/**
+ * Save a resolution record.
+ */
+export function saveResolution(record: ResolutionRecord): number {
+  const db = getDb();
+  const result = db.prepare(`
+    INSERT INTO resolutions
+      (market_id, event_type, event_description, category, outcome,
+       resolved_at, signals_30d, signals_7d, signals_1d, signals_at_resolution,
+       prediction_market_correct, pm_confidence_at_close,
+       consumer_sentiment_direction, fear_signals_direction, attention_level,
+       ai_retrospective, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    record.marketId,
+    record.eventType,
+    record.eventDescription,
+    record.category,
+    record.outcome,
+    record.resolvedAt,
+    record.signals30d,
+    record.signals7d,
+    record.signals1d,
+    record.signalsAtResolution,
+    record.predictionMarketCorrect,
+    record.pmConfidenceAtClose,
+    record.consumerSentimentDirection,
+    record.fearSignalsDirection,
+    record.attentionLevel,
+    record.aiRetrospective,
+    record.createdAt,
+  );
+  return Number(result.lastInsertRowid);
+}
+
+/**
+ * Check if a resolution record already exists for a market.
+ */
+export function hasResolution(marketId: string): boolean {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT 1 FROM resolutions WHERE market_id = ? LIMIT 1")
+    .get(marketId);
+  return !!row;
+}
+
+/**
+ * Get markets that have resolved (resolution = 'yes' or 'no') but don't yet
+ * have a resolution record. These are the markets we need to process.
+ */
+export function getNewlyResolvedMarkets(): {
+  id: string;
+  platform: string;
+  question: string;
+  category: string;
+  yesPrice: number;
+  resolution: string;
+  sentimentDirection: string | null;
+}[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT m.id, m.platform, m.question, m.category, m.yes_price,
+           m.resolution, m.sentiment_direction
+    FROM markets m
+    WHERE m.resolution IN ('yes', 'no')
+      AND NOT EXISTS (
+        SELECT 1 FROM resolutions r WHERE r.market_id = m.id
+      )
+  `).all() as {
+    id: string;
+    platform: string;
+    question: string;
+    category: string;
+    yesPrice: number;
+    resolution: string;
+    sentimentDirection: string | null;
+  }[];
+}
+
+/**
+ * Get all resolution records, most recent first.
+ */
+export function getResolutions(limit = 50): ResolutionRecord[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM resolutions ORDER BY resolved_at DESC LIMIT ?`,
+    )
+    .all(limit) as Record<string, unknown>[];
+  return rows.map(hydrateResolutionRow);
+}
+
+/**
+ * Get resolution records for a specific category.
+ */
+export function getResolutionsByCategory(
+  category: string,
+  limit = 50,
+): ResolutionRecord[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM resolutions WHERE category = ? ORDER BY resolved_at DESC LIMIT ?`,
+    )
+    .all(category, limit) as Record<string, unknown>[];
+  return rows.map(hydrateResolutionRow);
+}
+
+/**
+ * Compute track record statistics from all resolution records.
+ */
+export function computeTrackRecord(): {
+  totalResolutions: number;
+  predictionMarketAccuracy: number;
+  signalConcordanceRate: number;
+  byCategory: Record<string, { total: number; correct: number; accuracy: number }>;
+} | null {
+  const db = getDb();
+
+  const totalRow = db
+    .prepare("SELECT COUNT(*) as count FROM resolutions WHERE event_type = 'market_resolution'")
+    .get() as { count: number };
+  const total = totalRow.count;
+  if (total === 0) return null;
+
+  const correctRow = db
+    .prepare(
+      "SELECT COUNT(*) as count FROM resolutions WHERE event_type = 'market_resolution' AND prediction_market_correct = 1",
+    )
+    .get() as { count: number };
+
+  // Concordance: how often did all available signals agree?
+  // A resolution is "concordant" if consumer sentiment and fear signals
+  // were both aligned or both neutral
+  const concordantRow = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM resolutions
+       WHERE event_type = 'market_resolution'
+         AND (consumer_sentiment_direction = 'aligned' OR consumer_sentiment_direction IS NULL)
+         AND (fear_signals_direction = 'aligned' OR fear_signals_direction IS NULL)`,
+    )
+    .get() as { count: number };
+
+  // Per-category breakdown
+  const catRows = db
+    .prepare(
+      `SELECT category,
+              COUNT(*) as total,
+              SUM(CASE WHEN prediction_market_correct = 1 THEN 1 ELSE 0 END) as correct
+       FROM resolutions
+       WHERE event_type = 'market_resolution'
+       GROUP BY category`,
+    )
+    .all() as { category: string; total: number; correct: number }[];
+
+  const byCategory: Record<string, { total: number; correct: number; accuracy: number }> = {};
+  for (const row of catRows) {
+    byCategory[row.category] = {
+      total: row.total,
+      correct: row.correct,
+      accuracy: row.total > 0 ? Math.round((row.correct / row.total) * 100) : 0,
+    };
+  }
+
+  return {
+    totalResolutions: total,
+    predictionMarketAccuracy: total > 0 ? Math.round((correctRow.count / total) * 100) : 0,
+    signalConcordanceRate: total > 0 ? Math.round((concordantRow.count / total) * 100) : 0,
+    byCategory,
+  };
+}
+
+function hydrateResolutionRow(row: Record<string, unknown>): ResolutionRecord {
+  return {
+    id: row.id as number,
+    marketId: (row.market_id as string) ?? null,
+    eventType: row.event_type as ResolutionRecord["eventType"],
+    eventDescription: row.event_description as string,
+    category: row.category as string,
+    outcome: row.outcome as string,
+    resolvedAt: row.resolved_at as string,
+    signals30d: (row.signals_30d as string) ?? null,
+    signals7d: (row.signals_7d as string) ?? null,
+    signals1d: (row.signals_1d as string) ?? null,
+    signalsAtResolution: (row.signals_at_resolution as string) ?? null,
+    predictionMarketCorrect: (row.prediction_market_correct as number) ?? null,
+    pmConfidenceAtClose: (row.pm_confidence_at_close as number) ?? null,
+    consumerSentimentDirection: (row.consumer_sentiment_direction as string) ?? null,
+    fearSignalsDirection: (row.fear_signals_direction as string) ?? null,
+    attentionLevel: (row.attention_level as string) ?? null,
+    aiRetrospective: (row.ai_retrospective as string) ?? null,
+    createdAt: row.created_at as string,
+  };
+}
+
+function hydrateAttentionRow(row: Record<string, unknown>): AttentionTerm {
+  return {
+    id: row.id as number,
+    term: row.term as string,
+    category: row.category as string,
+    generatedReason: (row.generated_reason as string) ?? null,
+    generatedAt: row.generated_at as string,
+    expiresAt: row.expires_at as string,
+    trendValue: (row.trend_value as number) ?? null,
+    trendFetchedAt: (row.trend_fetched_at as string) ?? null,
+  };
 }
 
 // ---------------------------------------------------------------------------

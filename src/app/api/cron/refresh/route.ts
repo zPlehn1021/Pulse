@@ -9,6 +9,16 @@ import {
 } from "@/lib/db/client";
 import { computeCompositeIndex } from "@/lib/sentiment/compute";
 import { generateAllNarratives } from "@/lib/sentiment/narrative";
+import { classifyNewMarkets } from "@/lib/sentiment/classify";
+import { fetchAllFredData } from "@/lib/platforms/fred";
+import { fetchTrendsForAttentionTerms } from "@/lib/platforms/trends";
+import { curateAttentionTerms } from "@/lib/sentiment/curate-terms";
+import { processNewResolutions } from "@/lib/sentiment/resolution";
+import {
+  getSignalSourceAge,
+  getAttentionTermsAge,
+  pruneExpiredAttentionTerms,
+} from "@/lib/db/client";
 import { polymarket } from "@/lib/platforms/polymarket";
 import { kalshi } from "@/lib/platforms/kalshi";
 import { manifold } from "@/lib/platforms/manifold";
@@ -94,49 +104,121 @@ async function handleRefresh(request: Request) {
 
   let snapshotId: number | null = null;
   let narrativeGenerated = false;
+  let marketsClassified = 0;
+  let resolutionsProcessed = 0;
+  let fredResult: { saved: number; skipped: number; errors: string[] } | null = null;
+  let attentionResult: { termsCurated: number; trendsFetched: number } | null = null;
+
+  // Hourly tasks (FRED + attention) — run on every cycle but skip if data is fresh
+  const HOURLY_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
+  // FRED data fetch
+  const fredAge = getSignalSourceAge("fred");
+  const shouldFetchFred =
+    process.env.FRED_API_KEY &&
+    (fredAge === null || fredAge > HOURLY_INTERVAL_MS);
+
+  if (shouldFetchFred) {
+    try {
+      fredResult = await fetchAllFredData();
+    } catch (err) {
+      console.error("FRED fetch failed:", err);
+    }
+  }
+
+  // AI-curated attention terms + Google Trends fetch
+  const attentionAge = getAttentionTermsAge();
+  const shouldCurateTerms =
+    process.env.ANTHROPIC_API_KEY &&
+    (attentionAge === null || attentionAge > HOURLY_INTERVAL_MS);
+
+  if (shouldCurateTerms) {
+    try {
+      const termsCurated = await curateAttentionTerms();
+      let trendsFetched = 0;
+      if (termsCurated > 0) {
+        trendsFetched = await fetchTrendsForAttentionTerms();
+      }
+      attentionResult = { termsCurated, trendsFetched };
+      // Clean up old expired terms
+      pruneExpiredAttentionTerms(72);
+    } catch (err) {
+      console.error("Attention curation failed:", err);
+    }
+  }
 
   if (allMarkets.length > 0) {
     // 1. Upsert current market state
-    upsertMarkets(allMarkets);
-
-    // 2. Save per-market price snapshot (for momentum/volatility tracking)
-    saveMarketPrices(allMarkets);
-
-    // 3. Compute the new analysis
-    const index = computeCompositeIndex(allMarkets);
-
-    // 4. Save composite snapshot
-    snapshotId = saveSnapshot(index);
-
-    // 5. Generate AI narratives — throttled to every 30 min to save tokens
-    const narrativeAge = getLatestNarrativeAge();
-    const NARRATIVE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
-    const shouldGenerateNarrative =
-      process.env.ANTHROPIC_API_KEY &&
-      (narrativeAge === null || narrativeAge > NARRATIVE_INTERVAL_MS);
-
-    if (shouldGenerateNarrative) {
-      try {
-        const narratives = await generateAllNarratives(index);
-
-        if (narratives.overall && snapshotId) {
-          saveNarrative(snapshotId, null, narratives.overall);
-        }
-        for (const [category, narrative] of Object.entries(
-          narratives.categories,
-        )) {
-          if (narrative && snapshotId) {
-            saveNarrative(snapshotId, category, narrative);
-          }
-        }
-        narrativeGenerated = true;
-      } catch (err) {
-        console.error("Narrative generation failed:", err);
-      }
+    try {
+      upsertMarkets(allMarkets);
+    } catch (err) {
+      console.error("Market upsert failed:", err);
     }
 
-    // 6. Prune old price data (keep 48 hours)
-    pruneOldPrices(48);
+    // 2. Classify new markets for sentiment direction (positive/negative/neutral)
+    try {
+      marketsClassified = await classifyNewMarkets();
+    } catch (err) {
+      console.error("Sentiment classification failed:", err);
+    }
+
+    // 3. Check for newly resolved markets → create resolution records
+    try {
+      resolutionsProcessed = await processNewResolutions();
+    } catch (err) {
+      console.error("Resolution processing failed:", err);
+    }
+
+    // 4. Save per-market price snapshot (for momentum/volatility tracking)
+    try {
+      saveMarketPrices(allMarkets);
+    } catch (err) {
+      console.error("Market price save failed:", err);
+    }
+
+    // 5. Compute the new analysis (now with signal layers from FRED)
+    try {
+      const index = computeCompositeIndex(allMarkets);
+
+      // 6. Save composite snapshot
+      snapshotId = saveSnapshot(index);
+
+      // 7. Generate AI narratives — throttled to every 60 min to save tokens
+      const narrativeAge = getLatestNarrativeAge();
+      const NARRATIVE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+      const shouldGenerateNarrative =
+        process.env.ANTHROPIC_API_KEY &&
+        (narrativeAge === null || narrativeAge > NARRATIVE_INTERVAL_MS);
+
+      if (shouldGenerateNarrative) {
+        try {
+          const narratives = await generateAllNarratives(index);
+
+          if (narratives.overall && snapshotId) {
+            saveNarrative(snapshotId, null, narratives.overall);
+          }
+          for (const [category, narrative] of Object.entries(
+            narratives.categories,
+          )) {
+            if (narrative && snapshotId) {
+              saveNarrative(snapshotId, category, narrative);
+            }
+          }
+          narrativeGenerated = true;
+        } catch (err) {
+          console.error("Narrative generation failed:", err);
+        }
+      }
+    } catch (err) {
+      console.error("Composite index computation failed:", err);
+    }
+
+    // 8. Prune old price data (keep 48 hours)
+    try {
+      pruneOldPrices(48);
+    } catch (err) {
+      console.error("Price pruning failed:", err);
+    }
   }
 
   return NextResponse.json({
@@ -145,6 +227,12 @@ async function handleRefresh(request: Request) {
     totalMarkets: allMarkets.length,
     snapshotId,
     narrativeGenerated,
+    marketsClassified,
+    resolutionsProcessed,
+    fred: fredResult
+      ? { saved: fredResult.saved, skipped: fredResult.skipped, errors: fredResult.errors }
+      : null,
+    attention: attentionResult,
     results,
     health: getPlatformHealth(),
     fetchDuration: Date.now() - start,

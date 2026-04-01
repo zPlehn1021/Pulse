@@ -6,11 +6,21 @@ import type {
   CompositeIndex,
   Platform,
   PLATFORM_TIERS,
+  SignalLayersData,
+  SignalTension,
 } from "@/lib/platforms/types";
 import { PLATFORM_TIERS as TIERS } from "@/lib/platforms/types";
 import { CATEGORIES } from "./categories";
 import { matchMarketsAcrossPlatforms } from "./matcher";
-import { getCategoryPriceDeltas } from "@/lib/db/client";
+import {
+  getCategoryPriceDeltas,
+  getCategorySentimentDirections,
+  getLatestAttentionTerms,
+  type SentimentDirection,
+} from "@/lib/db/client";
+import { computeSignalLayers } from "./signals";
+import { computeAttentionScores } from "@/lib/platforms/trends";
+import { detectTensions } from "./tensions";
 
 const ALL_PLATFORMS: Platform[] = [
   "polymarket",
@@ -113,18 +123,28 @@ export function computeCategoryAnalysis(
   // Fetch price history from DB for this category
   const priceDeltas = getCategoryPriceDeltas(category);
 
+  // Fetch sentiment direction classifications for this category
+  const sentimentDirs = getCategorySentimentDirections(category);
+
   // Enrich with momentum
   const enriched = enrichMarketsWithMomentum(catMarkets, priceDeltas);
 
   // -- SENTIMENT: engagement-weighted average of belief shifts --
-  // Positive = growing optimism, negative = growing pessimism
-  // Scale: raw delta is -1 to +1, we scale to -100 to +100
+  // Now sentiment-direction-aware:
+  //   positive markets: price up → momentum up (optimism growing)
+  //   negative markets: price up → momentum DOWN (pessimism growing)
+  //   neutral markets: excluded from momentum (tracked for volatility/attention only)
   let momentumNum = 0;
   let momentumDen = 0;
   for (const m of enriched) {
     const w = effectiveWeight(m);
     if (w > 0 && m.delta24h !== 0) {
-      momentumNum += m.delta24h * w;
+      const direction = sentimentDirs.get(m.id) ?? null;
+
+      // Apply sentiment direction: flip sign for negative markets, skip neutral
+      if (direction === "neutral") continue;
+      const sign = direction === "negative" ? -1 : 1;
+      momentumNum += m.delta24h * sign * w;
       momentumDen += w;
     }
   }
@@ -255,6 +275,76 @@ export function computeCompositeIndex(
 
   const totalMarkets = categories.reduce((s, c) => s + c.marketCount, 0);
 
+  // v2: Compute signal layers from FRED + attention data (graceful if no data yet)
+  let signalLayers: SignalLayersData | null = null;
+  try {
+    const layers = computeSignalLayers();
+
+    // Attention layer: compute from latest curated terms
+    const attentionTerms = getLatestAttentionTerms();
+    const attention = computeAttentionScores(attentionTerms);
+
+    // Attention-market gap: how much does public attention diverge from market pricing?
+    // High gap = markets see something the public hasn't noticed (or vice versa)
+    // Simple heuristic: if overall attention is low but markets are active, gap is high
+    const marketActivity = activity; // 0-100
+    const publicAwareness = attention.overall; // 0-100
+    const attentionMarketGap = Math.abs(marketActivity - publicAwareness);
+
+    const attentionConfidence = attentionTerms.length > 0
+      ? Math.round((attentionTerms.filter((t) => t.trendValue !== null).length / attentionTerms.length) * 100)
+      : 0;
+
+    signalLayers = {
+      predictionMarkets: {
+        momentum,
+        confidence: totalMarkets > 50 ? 100 : Math.round((totalMarkets / 50) * 100),
+        marketCount: totalMarkets,
+      },
+      economicPsychology: {
+        consumerSentiment: layers.economicPsychology.consumerSentiment,
+        consumerSentimentTrend: layers.economicPsychology.consumerSentimentTrend,
+        expectationsVsPresent: layers.economicPsychology.expectationsVsPresent,
+        unemploymentRate: layers.economicPsychology.unemploymentRate,
+        joblessClaimsTrend: layers.economicPsychology.joblessClaimsTrend,
+        retailSalesTrend: layers.economicPsychology.retailSalesTrend,
+        savingsRate: layers.economicPsychology.savingsRate,
+        confidence: layers.economicPsychology.confidence,
+      },
+      fearSignals: {
+        composite: layers.fearSignals.composite,
+        vix: layers.fearSignals.vix,
+        vixLevel: layers.fearSignals.vixLevel,
+        yieldCurveSpread: layers.fearSignals.yieldCurveSpread,
+        yieldCurveInverted: layers.fearSignals.yieldCurveInverted,
+        goldTrend: layers.fearSignals.goldTrend,
+        confidence: layers.fearSignals.confidence,
+      },
+      attention: {
+        publicAwareness,
+        topTerms: attention.topTerms.map((t) => t.term),
+        attentionMarketGap,
+        confidence: attentionConfidence,
+      },
+    };
+  } catch (err) {
+    console.error("Signal layers computation failed:", err);
+  }
+
+  // v2: Detect cross-layer signal tensions
+  let tensions: SignalTension[] = [];
+  if (signalLayers) {
+    try {
+      tensions = detectTensions({
+        signalLayers,
+        overallMomentum: momentum,
+        overallActivity: activity,
+      });
+    } catch (err) {
+      console.error("Tension detection failed:", err);
+    }
+  }
+
   return {
     momentum,
     volatility,
@@ -264,5 +354,7 @@ export function computeCompositeIndex(
     divergences: divergences.slice(0, 10), // top 10 by spread
     timestamp: new Date(),
     narrative: null,
+    signalLayers,
+    tensions,
   };
 }

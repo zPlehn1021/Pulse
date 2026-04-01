@@ -66,7 +66,11 @@ function toNormalized(
     liquidity: parseDollars(market.liquidity_dollars),
     lastUpdated: new Date(),
     sourceUrl: `https://kalshi.com/markets/${event.event_ticker}`,
-    resolution: market.status !== "open" ? null : undefined,
+    resolution:
+      market.result === "yes" ? "yes" :
+      market.result === "no" ? "no" :
+      market.status !== "open" ? null :
+      undefined,
   };
 }
 
