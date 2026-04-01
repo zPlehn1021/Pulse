@@ -45,6 +45,7 @@ function toNormalized(m: ManifoldMarket): NormalizedMarket {
     lastUpdated: new Date(),
     sourceUrl: `https://manifold.markets/${m.creatorUsername}/${m.slug}`,
     resolution,
+    closeDate: m.closeTime ? new Date(m.closeTime) : null,
   };
 }
 

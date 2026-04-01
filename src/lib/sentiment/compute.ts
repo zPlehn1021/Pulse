@@ -112,12 +112,43 @@ export function enrichMarketsWithMomentum(
 // Category-level analysis
 // ---------------------------------------------------------------------------
 
+/**
+ * Check if a market is near expiration (within 48 hours of close).
+ * Near-expiration markets converge to 0 or 1 and create fake momentum/volatility.
+ */
+function isNearExpiration(m: NormalizedMarket, hoursThreshold = 48): boolean {
+  if (!m.closeDate) return false;
+  const msUntilClose = m.closeDate.getTime() - Date.now();
+  return msUntilClose >= 0 && msUntilClose < hoursThreshold * 60 * 60 * 1000;
+}
+
+/**
+ * Check if a market is past its close date (expired but not yet marked resolved).
+ */
+function isPastExpiration(m: NormalizedMarket): boolean {
+  if (!m.closeDate) return false;
+  return m.closeDate.getTime() < Date.now();
+}
+
+/**
+ * Check if a market has effectively converged (price near 0 or 1).
+ * Markets at >97% or <3% are essentially resolved and create noise.
+ */
+function isConverged(m: NormalizedMarket, threshold = 0.97): boolean {
+  return m.yesPrice >= threshold || m.yesPrice <= (1 - threshold);
+}
+
 export function computeCategoryAnalysis(
   allMarkets: NormalizedMarket[],
   category: CategoryId,
 ): CategoryAnalysis {
   const catMarkets = allMarkets.filter(
-    (m) => m.category === category && m.resolution === undefined,
+    (m) =>
+      m.category === category &&
+      m.resolution === undefined &&
+      !isPastExpiration(m) &&    // Exclude expired-but-unresolved markets
+      !isNearExpiration(m) &&    // Exclude markets within 48h of close
+      !isConverged(m),           // Exclude effectively resolved markets (>97% or <3%)
   );
 
   // Fetch price history from DB for this category

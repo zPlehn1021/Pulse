@@ -40,6 +40,9 @@ function runMigrations(db: Database.Database): void {
   if (!columnNames.includes("classified_at")) {
     db.exec("ALTER TABLE markets ADD COLUMN classified_at TEXT");
   }
+  if (!columnNames.includes("close_date")) {
+    db.exec("ALTER TABLE markets ADD COLUMN close_date TEXT");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -53,10 +56,10 @@ export function upsertMarkets(markets: NormalizedMarket[]): void {
   const stmt = db.prepare(`
     INSERT INTO markets
       (id, platform, question, category, yes_price,
-       volume_24h, liquidity, last_updated, source_url, resolution)
+       volume_24h, liquidity, last_updated, source_url, resolution, close_date)
     VALUES
       (@id, @platform, @question, @category, @yesPrice,
-       @volume24h, @liquidity, @lastUpdated, @sourceUrl, @resolution)
+       @volume24h, @liquidity, @lastUpdated, @sourceUrl, @resolution, @closeDate)
     ON CONFLICT(id) DO UPDATE SET
       platform = excluded.platform,
       question = excluded.question,
@@ -66,7 +69,8 @@ export function upsertMarkets(markets: NormalizedMarket[]): void {
       liquidity = excluded.liquidity,
       last_updated = excluded.last_updated,
       source_url = excluded.source_url,
-      resolution = excluded.resolution
+      resolution = excluded.resolution,
+      close_date = excluded.close_date
   `);
 
   const upsertMany = db.transaction((items: NormalizedMarket[]) => {
@@ -82,6 +86,7 @@ export function upsertMarkets(markets: NormalizedMarket[]): void {
         lastUpdated: m.lastUpdated.toISOString(),
         sourceUrl: m.sourceUrl,
         resolution: m.resolution ?? null,
+        closeDate: m.closeDate ? m.closeDate.toISOString() : null,
       });
     }
   });
@@ -114,6 +119,7 @@ function hydrateMarketRow(row: Record<string, unknown>): NormalizedMarket {
     lastUpdated: new Date(row.last_updated as string),
     sourceUrl: row.source_url as string,
     resolution: (row.resolution as "yes" | "no" | null) ?? undefined,
+    closeDate: row.close_date ? new Date(row.close_date as string) : null,
   };
 }
 

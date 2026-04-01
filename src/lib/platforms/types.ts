@@ -31,6 +31,7 @@ export interface NormalizedMarket {
   lastUpdated: Date;
   sourceUrl: string;
   resolution?: 'yes' | 'no' | null;
+  closeDate?: Date | null;  // When market closes/expires — used to filter near-expiration noise
 }
 
 // ---------------------------------------------------------------------------

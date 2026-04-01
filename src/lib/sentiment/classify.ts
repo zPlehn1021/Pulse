@@ -89,11 +89,13 @@ export async function classifyNewMarkets(): Promise<number> {
   const unclassified = getUnclassifiedMarkets();
   if (unclassified.length === 0) return 0;
 
-  const BATCH_SIZE = 20;
+  const BATCH_SIZE = 50;
+  const MAX_PER_CYCLE = 100; // Cap total classifications per cron cycle to limit API usage
+  const toProcess = unclassified.slice(0, MAX_PER_CYCLE);
   let totalClassified = 0;
 
-  for (let i = 0; i < unclassified.length; i += BATCH_SIZE) {
-    const batch = unclassified.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
+    const batch = toProcess.slice(i, i + BATCH_SIZE);
     try {
       const results = await classifyBatch(batch);
       if (results.length > 0) {

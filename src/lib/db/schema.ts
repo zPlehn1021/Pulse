@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS markets (
   last_updated TEXT NOT NULL,
   source_url TEXT NOT NULL,
   resolution TEXT,
+  close_date TEXT,
   sentiment_direction TEXT,
   classified_at TEXT
 );

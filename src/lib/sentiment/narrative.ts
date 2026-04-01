@@ -14,6 +14,16 @@ function getClient(): Anthropic {
 }
 
 /**
+ * Structured insight returned by the AI briefing.
+ */
+export interface KeyInsight {
+  headline: string;
+  detail: string;
+  layers: string[];
+  sentiment: "positive" | "negative" | "mixed" | "neutral";
+}
+
+/**
  * Format a market for the AI prompt.
  */
 function formatMarket(m: MarketWithMomentum): string {
@@ -26,328 +36,23 @@ function formatMarket(m: MarketWithMomentum): string {
 }
 
 /**
- * Generate a narrative briefing for a single category.
- */
-export async function generateCategoryNarrative(
-  cat: CategoryAnalysis,
-): Promise<string> {
-  const marketsText = cat.topMarkets.map(formatMarket).join("\n");
-
-  const platformSummary = Object.entries(cat.platformBreakdown)
-    .filter(([, v]) => v.marketCount > 0)
-    .map(
-      ([p, v]) =>
-        `${p}: ${v.marketCount} questions, avg confidence ${(v.avgPrice * 100).toFixed(0)}%, sentiment shift ${v.momentum > 0 ? "+" : ""}${v.momentum}`,
-    )
-    .join("\n  ");
-
-  const prompt = `You are a sentiment analyst for PULSE, a tool that tracks collective public belief and sentiment by analyzing prediction markets as a proxy for how people feel about the future.
-
-Analyze the following ${cat.category} data and write a 2-3 sentence briefing about what the collective believes.
-
-Category: ${cat.category}
-Questions tracked: ${cat.marketCount}
-Sentiment direction: ${cat.momentum} (-100=growing pessimism, 0=stable, +100=growing optimism)
-Uncertainty: ${cat.volatility}/100 (how much beliefs are shifting)
-Engagement: ${cat.activity}/100 (how many people are weighing in)
-
-Platform breakdown:
-  ${platformSummary}
-
-Most-watched questions:
-${marketsText}
-
-Rules:
-- Frame everything as what people believe, expect, or feel — not as market movements or price action
-- "73% confidence" means "73% of people believe this will happen", not a price
-- Shifts in probability = shifts in collective belief. A +5pp shift means people are becoming more convinced.
-- If sentiment is near 0 and uncertainty is low, say beliefs are stable and settled
-- Highlight where belief is strongest, weakest, or changing fastest
-- Be concise, factual, and specific. No filler words.
-- Write 2-3 sentences maximum. Do NOT use bullet points or headers.
-- Never use the words: bullish, bearish, arbitrage, trading, price, volume, market cap`;
-
-  try {
-    const response = await getClient().messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 200,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content[0];
-    return text.type === "text" ? cleanNarrative(text.text) : "";
-  } catch (err) {
-    console.error(`Category narrative failed for ${cat.category}:`, err);
-    return "";
-  }
-}
-
-/**
- * Structured insight returned by the AI briefing.
- */
-export interface KeyInsight {
-  headline: string;
-  detail: string;
-  layers: string[];
-  sentiment: "positive" | "negative" | "mixed" | "neutral";
-}
-
-/**
- * Generate structured key insights for the dashboard hero section.
- */
-export async function generateKeyInsights(
-  index: CompositeIndex,
-): Promise<KeyInsight[]> {
-  const sl = index.signalLayers;
-  const tensions = index.tensions ?? [];
-
-  const categorySummaries = index.categories
-    .filter((c) => c.marketCount > 0)
-    .map((c) => {
-      const topQ = c.topMarkets[0];
-      return `  ${c.category}: momentum=${c.momentum}, uncertainty=${c.volatility}, engagement=${c.activity}, ${c.marketCount} questions${topQ ? `. Top: "${topQ.question}" at ${(topQ.yesPrice * 100).toFixed(0)}%` : ""}`;
-    })
-    .join("\n");
-
-  let signalContext = "";
-  if (sl) {
-    signalContext = `
-Signal layers (the four lenses):
-  PREDICTION MARKETS: momentum ${sl.predictionMarkets.momentum} across ${sl.predictionMarkets.marketCount} questions
-  ECONOMIC PSYCHOLOGY: Consumer Sentiment ${sl.economicPsychology.consumerSentiment ?? "N/A"} (trend: ${sl.economicPsychology.consumerSentimentTrend}), unemployment ${sl.economicPsychology.unemploymentRate ?? "N/A"}%, jobless claims ${sl.economicPsychology.joblessClaimsTrend}, retail sales ${sl.economicPsychology.retailSalesTrend}, savings rate ${sl.economicPsychology.savingsRate ?? "N/A"}%
-  FEAR SIGNALS: Composite ${sl.fearSignals.composite}/100, VIX ${sl.fearSignals.vix ?? "N/A"} (${sl.fearSignals.vixLevel}), yield curve ${sl.fearSignals.yieldCurveSpread ?? "N/A"}% ${sl.fearSignals.yieldCurveInverted ? "INVERTED" : ""}, gold ${sl.fearSignals.goldTrend}
-  PUBLIC ATTENTION: Awareness ${sl.attention.publicAwareness}/100, attention-market gap ${sl.attention.attentionMarketGap}, top searches: ${sl.attention.topTerms.slice(0, 5).join(", ")}`;
-  }
-
-  const tensionText = tensions.length > 0
-    ? tensions.map((t) => `  [${t.severity.toUpperCase()}] ${t.description}`).join("\n")
-    : "  None detected";
-
-  const divergenceText = index.divergences.length > 0
-    ? index.divergences.slice(0, 3).map((d) =>
-        `  "${d.question}" — ${d.highPlatform}: ${d.highPrice}% vs ${d.lowPlatform}: ${d.lowPrice}% (${d.spread}pp gap)`
-      ).join("\n")
-    : "  None significant";
-
-  const prompt = `You are the lead analyst for PULSE, a societal sentiment research tool. Your job is to find the MOST INTERESTING and ACTIONABLE insights by connecting data across four signal layers.
-
-Here is the current state of collective sentiment:
-
-Overall: momentum ${index.momentum} (-100 to +100), uncertainty ${index.volatility}/100, engagement ${index.activity}/100, ${index.totalMarkets} questions tracked
-${signalContext}
-
-Categories:
-${categorySummaries}
-
-Signal tensions (where layers disagree):
-${tensionText}
-
-Cross-community disagreements:
-${divergenceText}
-
-Generate exactly 3-5 KEY INSIGHTS. Each insight should:
-1. CONNECT data from multiple layers — don't just report one number
-2. Explain WHY it matters, not just WHAT the number is
-3. Be specific with exact numbers
-4. Tell a story about what society is feeling or missing
-
-Reply with ONLY a JSON array. Each element:
-{
-  "headline": "Short punchy headline (8-12 words max)",
-  "detail": "1-2 sentences connecting the data points and explaining significance",
-  "layers": ["which signal layers are involved — use: markets, economy, fear, attention"],
-  "sentiment": "positive|negative|mixed|neutral"
-}
-
-IMPORTANT RULES:
-- The most valuable insights are CROSS-LAYER — when fear says one thing and markets say another, that's interesting
-- Frame as collective belief and public experience, never as trading advice
-- If there are tensions, at least 2 insights should reference them
-- Lead with the single most surprising or important finding
-- Be authoritative. This is a research briefing, not a blog post.
-- Do NOT use: bullish, bearish, arbitrage, trading, price action`;
-
-  try {
-    const response = await getClient().messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content[0];
-    if (text.type !== "text") return [];
-
-    const jsonMatch = text.text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return [];
-
-    const parsed = JSON.parse(jsonMatch[0]) as KeyInsight[];
-    // Validate shape
-    return parsed.filter(
-      (i) =>
-        typeof i.headline === "string" &&
-        typeof i.detail === "string" &&
-        Array.isArray(i.layers) &&
-        typeof i.sentiment === "string",
-    );
-  } catch (err) {
-    console.error("Key insights generation failed:", err);
-    return [];
-  }
-}
-
-/**
- * Generate the top-level dashboard briefing across all categories.
- */
-export async function generateOverallNarrative(
-  index: CompositeIndex,
-): Promise<string> {
-  const categorySummaries = index.categories
-    .filter((c) => c.marketCount > 0)
-    .map((c) => {
-      const topQuestion = c.topMarkets[0];
-      const topLine = topQuestion
-        ? `Most-watched: "${topQuestion.question}" at ${(topQuestion.yesPrice * 100).toFixed(0)}% confidence`
-        : "";
-      return `  ${c.category}: sentiment=${c.momentum}, uncertainty=${c.volatility}, engagement=${c.activity}, ${c.marketCount} questions. ${topLine}`;
-    })
-    .join("\n");
-
-  const divergenceText =
-    index.divergences.length > 0
-      ? index.divergences
-          .slice(0, 5)
-          .map(
-            (d) =>
-              `  "${d.question}" — ${d.highPlatform} community: ${d.highPrice}% vs ${d.lowPlatform} community: ${d.lowPrice}% (${d.spread}pp disagreement)`,
-          )
-          .join("\n")
-      : "  No significant cross-community disagreements detected.";
-
-  // Signal layers context
-  let signalContext = "";
-  if (index.signalLayers) {
-    const sl = index.signalLayers;
-    signalContext = `
-Signal layers:
-  Economic Psychology: Consumer Sentiment ${sl.economicPsychology.consumerSentiment ?? "N/A"} (trend: ${sl.economicPsychology.consumerSentimentTrend}), confidence: ${sl.economicPsychology.confidence}%
-  Fear Signals: Composite ${sl.fearSignals.composite}/100, VIX ${sl.fearSignals.vix ?? "N/A"} (${sl.fearSignals.vixLevel}), yield curve ${sl.fearSignals.yieldCurveInverted ? "INVERTED" : "normal"} at ${sl.fearSignals.yieldCurveSpread ?? "N/A"}%
-  Public Attention: Awareness ${sl.attention.publicAwareness}/100, attention-market gap ${sl.attention.attentionMarketGap}`;
-  }
-
-  // Tensions context
-  const tensions = index.tensions ?? [];
-  const tensionText =
-    tensions.length > 0
-      ? tensions
-          .slice(0, 5)
-          .map((t) => `  [${t.severity.toUpperCase()}] ${t.description}`)
-          .join("\n")
-      : "  No significant cross-layer tensions detected.";
-
-  const prompt = `You are the lead analyst for PULSE, a societal sentiment research tool. PULSE synthesizes four signal layers — prediction markets (${index.totalMarkets} questions across 5 platforms), economic psychology (consumer surveys), fear indicators (VIX, yield curve), and public attention (AI-curated Google Trends) — into a unified picture of how society feels about the future.
-
-Write a 3-5 sentence briefing summarizing what the collective believes right now and where the signals disagree.
-
-Overall sentiment:
-  Direction: ${index.momentum} (-100=growing pessimism, 0=stable, +100=growing optimism)
-  Uncertainty: ${index.volatility}/100 (how much beliefs are in flux)
-  Engagement: ${index.activity}/100 (how actively people are weighing in)
-  Total questions tracked: ${index.totalMarkets}
-${signalContext}
-
-Category breakdown:
-${categorySummaries}
-
-Cross-community disagreements (same question, different beliefs):
-${divergenceText}
-
-Cross-layer signal tensions (disagreements BETWEEN signal types):
-${tensionText}
-
-Rules:
-- This is a societal sentiment tool, NOT a trading dashboard. Frame everything as collective belief, public expectation, and shifts in how people feel.
-- Probabilities = confidence levels. "17% on Iran" means "only 17% of people believe this will happen."
-- Divergences = communities that see the world differently.
-- Signal tensions are the most interesting insight — when prediction markets, consumer sentiment, fear indicators, and public attention disagree, something important may be unfolding. If tensions exist, weave them into the narrative.
-- Lead with the most significant shift or tension
-- Be authoritative and specific. Use exact numbers.
-- 3-5 sentences maximum. No bullet points, no headers.
-- Never use the words: bullish, bearish, arbitrage, trading, price action, volume`;
-
-  try {
-    const response = await getClient().messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 300,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content[0];
-    return text.type === "text" ? cleanNarrative(text.text) : "";
-  } catch (err) {
-    console.error("Overall narrative generation failed:", err);
-    return "";
-  }
-}
-
-/**
  * Strip markdown formatting artifacts from AI output.
  */
 function cleanNarrative(text: string): string {
   return text
-    .replace(/^#+\s+.*\n*/gm, "") // remove markdown headers
-    .replace(/\*\*PULSE[^*]*\*\*\s*/g, "") // remove "**PULSE Brief: ...**" labels
-    .replace(/\*\*/g, "") // remove remaining bold markers
+    .replace(/^#+\s+.*\n*/gm, "")
+    .replace(/\*\*PULSE[^*]*\*\*\s*/g, "")
+    .replace(/\*\*/g, "")
     .trim();
 }
 
 /**
- * Generate AI implications for detected signal tensions.
- * Batches all tensions into a single API call for efficiency.
- */
-async function generateTensionImplications(
-  tensions: SignalTension[],
-): Promise<void> {
-  if (tensions.length === 0) return;
-
-  const tensionDescriptions = tensions
-    .map((t, i) => `${i + 1}. [${t.severity}] ${t.description}`)
-    .join("\n");
-
-  const prompt = `You are a societal sentiment analyst. For each signal tension below, write a brief 1-sentence implication — what might this disagreement mean for society? Frame as collective belief and public experience, not as financial advice.
-
-Signal tensions:
-${tensionDescriptions}
-
-Reply with ONLY a JSON array of strings, one implication per tension, in the same order. Each should be 1 concise sentence.
-Example: ["Implication for tension 1", "Implication for tension 2"]`;
-
-  try {
-    const response = await getClient().messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 500,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content[0];
-    if (text.type !== "text") return;
-
-    const jsonMatch = text.text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return;
-
-    const implications = JSON.parse(jsonMatch[0]) as string[];
-    for (let i = 0; i < Math.min(tensions.length, implications.length); i++) {
-      if (typeof implications[i] === "string") {
-        tensions[i].implication = implications[i];
-      }
-    }
-  } catch (err) {
-    console.error("Tension implication generation failed:", err);
-  }
-}
-
-/**
- * Generate all narratives for a composite index.
- * Runs category narratives, key insights, and tension implications in parallel.
+ * Generate ALL narratives in a SINGLE API call to minimize token usage.
+ *
+ * Previously: 9 separate calls (6 category + 1 overall + 1 key insights + 1 tension implications)
+ * Now: 1 call that returns everything as structured JSON
+ *
+ * Returns: overall narrative, per-category narratives, key insights, and tension implications.
  */
 export async function generateAllNarratives(
   index: CompositeIndex,
@@ -357,38 +62,141 @@ export async function generateAllNarratives(
   keyInsights: KeyInsight[];
 }> {
   try {
-    // Generate category narratives + tension implications + key insights in parallel
-    const [categoryResults, , keyInsights] = await Promise.all([
-      Promise.allSettled(
-        index.categories
-          .filter((c) => c.marketCount > 0)
-          .map(async (cat) => ({
-            category: cat.category,
-            narrative: await generateCategoryNarrative(cat),
-          })),
-      ),
-      generateTensionImplications(index.tensions ?? []),
-      generateKeyInsights(index),
-    ]);
+    const sl = index.signalLayers;
+    const tensions = index.tensions ?? [];
 
-    const categories: Record<string, string> = {};
-    for (const result of categoryResults) {
-      if (result.status === "fulfilled") {
-        categories[result.value.category] = result.value.narrative;
+    // Build category context
+    const categoryBlocks = index.categories
+      .filter((c) => c.marketCount > 0)
+      .map((cat) => {
+        const marketsText = cat.topMarkets.slice(0, 3).map(formatMarket).join("\n");
+        const platformSummary = Object.entries(cat.platformBreakdown)
+          .filter(([, v]) => v.marketCount > 0)
+          .map(([p, v]) => `${p}: ${v.marketCount}q, avg ${(v.avgPrice * 100).toFixed(0)}%, shift ${v.momentum > 0 ? "+" : ""}${v.momentum}`)
+          .join("; ");
+        return `  ${cat.category.toUpperCase()} (${cat.marketCount} questions, momentum=${cat.momentum}, uncertainty=${cat.volatility}, engagement=${cat.activity}):
+    Platforms: ${platformSummary}
+    Top questions:\n${marketsText}`;
+      })
+      .join("\n\n");
+
+    // Signal layers context
+    let signalContext = "";
+    if (sl) {
+      signalContext = `
+SIGNAL LAYERS:
+  PREDICTION MARKETS: momentum ${sl.predictionMarkets.momentum}, ${sl.predictionMarkets.marketCount} questions
+  ECONOMIC PSYCHOLOGY: Consumer Sentiment ${sl.economicPsychology.consumerSentiment ?? "N/A"} (${sl.economicPsychology.consumerSentimentTrend}), unemployment ${sl.economicPsychology.unemploymentRate ?? "N/A"}%, jobless claims ${sl.economicPsychology.joblessClaimsTrend}, retail ${sl.economicPsychology.retailSalesTrend}, savings ${sl.economicPsychology.savingsRate ?? "N/A"}%
+  FEAR SIGNALS: Composite ${sl.fearSignals.composite}/100, VIX ${sl.fearSignals.vix ?? "N/A"} (${sl.fearSignals.vixLevel}), yield ${sl.fearSignals.yieldCurveSpread ?? "N/A"}%${sl.fearSignals.yieldCurveInverted ? " INVERTED" : ""}, gold ${sl.fearSignals.goldTrend}
+  PUBLIC ATTENTION: Awareness ${sl.attention.publicAwareness}/100, market gap ${sl.attention.attentionMarketGap}, top: ${sl.attention.topTerms.slice(0, 5).join(", ")}`;
+    }
+
+    // Tensions context
+    const tensionText = tensions.length > 0
+      ? tensions.map((t, i) => `  ${i + 1}. [${t.severity.toUpperCase()}] ${t.description}`).join("\n")
+      : "  None detected";
+
+    // Divergences
+    const divergenceText = index.divergences.length > 0
+      ? index.divergences.slice(0, 3).map((d) =>
+          `  "${d.question}" — ${d.highPlatform}: ${d.highPrice}% vs ${d.lowPlatform}: ${d.lowPrice}% (${d.spread}pp gap)`
+        ).join("\n")
+      : "  None significant";
+
+    const categoryIds = index.categories.filter((c) => c.marketCount > 0).map((c) => c.category);
+
+    const prompt = `You are the lead analyst for PULSE, a societal sentiment research tool that synthesizes prediction markets (${index.totalMarkets} questions across 5 platforms), economic psychology (FRED consumer surveys), fear indicators (VIX, yield curve), and public attention (AI-curated Google Trends).
+
+CURRENT STATE:
+Overall: momentum ${index.momentum} (-100 to +100), uncertainty ${index.volatility}/100, engagement ${index.activity}/100
+${signalContext}
+
+CATEGORIES:
+${categoryBlocks}
+
+CROSS-COMMUNITY DISAGREEMENTS:
+${divergenceText}
+
+SIGNAL TENSIONS:
+${tensionText}
+
+Generate a complete analysis as a single JSON object with this EXACT structure:
+{
+  "overall": "3-5 sentence briefing connecting the most important cross-signal patterns. Lead with the most surprising or important finding. Be specific with numbers.",
+  "categories": {
+    ${categoryIds.map((id) => `"${id}": "2-3 sentence briefing for ${id}"`).join(",\n    ")}
+  },
+  "keyInsights": [
+    {
+      "headline": "8-12 word punchy headline",
+      "detail": "1-2 sentences connecting data from multiple layers, explaining WHY it matters",
+      "layers": ["markets", "economy", "fear", "attention"],
+      "sentiment": "positive|negative|mixed|neutral"
+    }
+  ],
+  "tensionImplications": ["1-sentence implication for tension 1", "..."]
+}
+
+RULES:
+- Frame as collective belief and public experience, NEVER as trading advice
+- "73% confidence" = "73% of people believe this will happen"
+- Key insights MUST connect multiple signal layers — the most valuable insights are cross-layer
+- Generate 3-5 key insights. At least 2 should reference signal tensions if they exist
+- Lead overall narrative and first key insight with the single most important finding
+- Be authoritative, specific, use exact numbers
+- Category narratives: 2-3 sentences each, what the collective believes
+- Tension implications: 1 concise sentence each for what the disagreement means
+- NEVER use: bullish, bearish, arbitrage, trading, price action, volume, market cap
+- Reply with ONLY the JSON object, no other text`;
+
+    const response = await getClient().messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content[0];
+    if (text.type !== "text") {
+      return { overall: "", categories: {}, keyInsights: [] };
+    }
+
+    // Parse the JSON response
+    const jsonMatch = text.text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error("Narrative: no JSON found in response");
+      return { overall: "", categories: {}, keyInsights: [] };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      overall?: string;
+      categories?: Record<string, string>;
+      keyInsights?: KeyInsight[];
+      tensionImplications?: string[];
+    };
+
+    // Apply tension implications back to the tension objects
+    if (parsed.tensionImplications && tensions.length > 0) {
+      for (let i = 0; i < Math.min(tensions.length, parsed.tensionImplications.length); i++) {
+        if (typeof parsed.tensionImplications[i] === "string") {
+          tensions[i].implication = parsed.tensionImplications[i];
+        }
       }
     }
 
-    // Attach category narratives to the index for the overall briefing
-    for (const cat of index.categories) {
-      if (categories[cat.category]) {
-        cat.narrative = categories[cat.category];
-      }
-    }
+    // Validate key insights
+    const keyInsights = (parsed.keyInsights ?? []).filter(
+      (i) =>
+        typeof i.headline === "string" &&
+        typeof i.detail === "string" &&
+        Array.isArray(i.layers) &&
+        typeof i.sentiment === "string",
+    );
 
-    // Generate overall briefing
-    const overall = await generateOverallNarrative(index);
-
-    return { overall, categories, keyInsights: keyInsights ?? [] };
+    return {
+      overall: cleanNarrative(parsed.overall ?? ""),
+      categories: parsed.categories ?? {},
+      keyInsights,
+    };
   } catch (error) {
     console.error("Narrative generation failed:", error);
     return { overall: "", categories: {}, keyInsights: [] };
