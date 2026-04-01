@@ -204,6 +204,10 @@ async function handleRefresh(request: Request) {
               saveNarrative(snapshotId, category, narrative);
             }
           }
+          // Store key insights as JSON
+          if (narratives.keyInsights?.length > 0 && snapshotId) {
+            saveNarrative(snapshotId, "__key_insights__", JSON.stringify(narratives.keyInsights));
+          }
           narrativeGenerated = true;
         } catch (err) {
           console.error("Narrative generation failed:", err);

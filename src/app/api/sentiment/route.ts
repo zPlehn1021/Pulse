@@ -31,6 +31,13 @@ export async function GET() {
       }
     }
 
+    // Retrieve key insights
+    const keyInsightsRaw = getLatestNarrative("__key_insights__");
+    let keyInsights: unknown[] = [];
+    if (keyInsightsRaw) {
+      try { keyInsights = JSON.parse(keyInsightsRaw); } catch { /* ignore */ }
+    }
+
     // Build platform status
     const platformCounts: Record<string, number> = {};
     for (const m of markets) {
@@ -56,6 +63,7 @@ export async function GET() {
 
     return NextResponse.json({
       index,
+      keyInsights,
       history,
       fearGreed,
       platformStatus,

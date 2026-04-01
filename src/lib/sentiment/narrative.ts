@@ -3,7 +3,6 @@ import type {
   CompositeIndex,
   CategoryAnalysis,
   MarketWithMomentum,
-  Divergence,
   SignalTension,
 } from "@/lib/platforms/types";
 
@@ -80,6 +79,119 @@ Rules:
   } catch (err) {
     console.error(`Category narrative failed for ${cat.category}:`, err);
     return "";
+  }
+}
+
+/**
+ * Structured insight returned by the AI briefing.
+ */
+export interface KeyInsight {
+  headline: string;
+  detail: string;
+  layers: string[];
+  sentiment: "positive" | "negative" | "mixed" | "neutral";
+}
+
+/**
+ * Generate structured key insights for the dashboard hero section.
+ */
+export async function generateKeyInsights(
+  index: CompositeIndex,
+): Promise<KeyInsight[]> {
+  const sl = index.signalLayers;
+  const tensions = index.tensions ?? [];
+
+  const categorySummaries = index.categories
+    .filter((c) => c.marketCount > 0)
+    .map((c) => {
+      const topQ = c.topMarkets[0];
+      return `  ${c.category}: momentum=${c.momentum}, uncertainty=${c.volatility}, engagement=${c.activity}, ${c.marketCount} questions${topQ ? `. Top: "${topQ.question}" at ${(topQ.yesPrice * 100).toFixed(0)}%` : ""}`;
+    })
+    .join("\n");
+
+  let signalContext = "";
+  if (sl) {
+    signalContext = `
+Signal layers (the four lenses):
+  PREDICTION MARKETS: momentum ${sl.predictionMarkets.momentum} across ${sl.predictionMarkets.marketCount} questions
+  ECONOMIC PSYCHOLOGY: Consumer Sentiment ${sl.economicPsychology.consumerSentiment ?? "N/A"} (trend: ${sl.economicPsychology.consumerSentimentTrend}), unemployment ${sl.economicPsychology.unemploymentRate ?? "N/A"}%, jobless claims ${sl.economicPsychology.joblessClaimsTrend}, retail sales ${sl.economicPsychology.retailSalesTrend}, savings rate ${sl.economicPsychology.savingsRate ?? "N/A"}%
+  FEAR SIGNALS: Composite ${sl.fearSignals.composite}/100, VIX ${sl.fearSignals.vix ?? "N/A"} (${sl.fearSignals.vixLevel}), yield curve ${sl.fearSignals.yieldCurveSpread ?? "N/A"}% ${sl.fearSignals.yieldCurveInverted ? "INVERTED" : ""}, gold ${sl.fearSignals.goldTrend}
+  PUBLIC ATTENTION: Awareness ${sl.attention.publicAwareness}/100, attention-market gap ${sl.attention.attentionMarketGap}, top searches: ${sl.attention.topTerms.slice(0, 5).join(", ")}`;
+  }
+
+  const tensionText = tensions.length > 0
+    ? tensions.map((t) => `  [${t.severity.toUpperCase()}] ${t.description}`).join("\n")
+    : "  None detected";
+
+  const divergenceText = index.divergences.length > 0
+    ? index.divergences.slice(0, 3).map((d) =>
+        `  "${d.question}" — ${d.highPlatform}: ${d.highPrice}% vs ${d.lowPlatform}: ${d.lowPrice}% (${d.spread}pp gap)`
+      ).join("\n")
+    : "  None significant";
+
+  const prompt = `You are the lead analyst for PULSE, a societal sentiment research tool. Your job is to find the MOST INTERESTING and ACTIONABLE insights by connecting data across four signal layers.
+
+Here is the current state of collective sentiment:
+
+Overall: momentum ${index.momentum} (-100 to +100), uncertainty ${index.volatility}/100, engagement ${index.activity}/100, ${index.totalMarkets} questions tracked
+${signalContext}
+
+Categories:
+${categorySummaries}
+
+Signal tensions (where layers disagree):
+${tensionText}
+
+Cross-community disagreements:
+${divergenceText}
+
+Generate exactly 3-5 KEY INSIGHTS. Each insight should:
+1. CONNECT data from multiple layers — don't just report one number
+2. Explain WHY it matters, not just WHAT the number is
+3. Be specific with exact numbers
+4. Tell a story about what society is feeling or missing
+
+Reply with ONLY a JSON array. Each element:
+{
+  "headline": "Short punchy headline (8-12 words max)",
+  "detail": "1-2 sentences connecting the data points and explaining significance",
+  "layers": ["which signal layers are involved — use: markets, economy, fear, attention"],
+  "sentiment": "positive|negative|mixed|neutral"
+}
+
+IMPORTANT RULES:
+- The most valuable insights are CROSS-LAYER — when fear says one thing and markets say another, that's interesting
+- Frame as collective belief and public experience, never as trading advice
+- If there are tensions, at least 2 insights should reference them
+- Lead with the single most surprising or important finding
+- Be authoritative. This is a research briefing, not a blog post.
+- Do NOT use: bullish, bearish, arbitrage, trading, price action`;
+
+  try {
+    const response = await getClient().messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 800,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content[0];
+    if (text.type !== "text") return [];
+
+    const jsonMatch = text.text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+
+    const parsed = JSON.parse(jsonMatch[0]) as KeyInsight[];
+    // Validate shape
+    return parsed.filter(
+      (i) =>
+        typeof i.headline === "string" &&
+        typeof i.detail === "string" &&
+        Array.isArray(i.layers) &&
+        typeof i.sentiment === "string",
+    );
+  } catch (err) {
+    console.error("Key insights generation failed:", err);
+    return [];
   }
 }
 
@@ -235,18 +347,18 @@ Example: ["Implication for tension 1", "Implication for tension 2"]`;
 
 /**
  * Generate all narratives for a composite index.
- * Runs category narratives in parallel, then the overall briefing.
- * Also generates AI implications for any detected tensions.
+ * Runs category narratives, key insights, and tension implications in parallel.
  */
 export async function generateAllNarratives(
   index: CompositeIndex,
 ): Promise<{
   overall: string;
   categories: Record<string, string>;
+  keyInsights: KeyInsight[];
 }> {
   try {
-    // Generate category narratives + tension implications in parallel
-    const [categoryResults] = await Promise.all([
+    // Generate category narratives + tension implications + key insights in parallel
+    const [categoryResults, , keyInsights] = await Promise.all([
       Promise.allSettled(
         index.categories
           .filter((c) => c.marketCount > 0)
@@ -256,6 +368,7 @@ export async function generateAllNarratives(
           })),
       ),
       generateTensionImplications(index.tensions ?? []),
+      generateKeyInsights(index),
     ]);
 
     const categories: Record<string, string> = {};
@@ -275,9 +388,9 @@ export async function generateAllNarratives(
     // Generate overall briefing
     const overall = await generateOverallNarrative(index);
 
-    return { overall, categories };
+    return { overall, categories, keyInsights: keyInsights ?? [] };
   } catch (error) {
     console.error("Narrative generation failed:", error);
-    return { overall: "", categories: {} };
+    return { overall: "", categories: {}, keyInsights: [] };
   }
 }

@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useSentiment } from "@/hooks/useSentiment";
 import { useAutoRefresh } from "@/hooks/useAutoRefresh";
 import { SignalQuadrants } from "@/components/dashboard/SignalQuadrants";
-import { TensionPanel } from "@/components/dashboard/TensionPanel";
 import { AIBriefing } from "@/components/dashboard/AIBriefing";
 import { CategoryCard } from "@/components/dashboard/CategoryCard";
 import { DivergencePanel } from "@/components/dashboard/DivergencePanel";
@@ -26,6 +25,7 @@ const TABS: { id: Tab; label: string }[] = [
 export default function Home() {
   const {
     index,
+    keyInsights,
     totalMarkets,
     platformStatus,
     isLoading,
@@ -82,14 +82,15 @@ export default function Home() {
             <LoadingSkeleton platformCount={platformCount} />
           ) : (
             <div className="space-y-6">
-              {/* Hero: The 4 signal quadrants */}
+              {/* Hero: AI Key Insights + Signal Tensions + Full Narrative */}
+              <AIBriefing
+                narrative={index?.narrative}
+                keyInsights={keyInsights}
+                tensions={index?.tensions ?? []}
+              />
+
+              {/* The 4 signal quadrants */}
               <SignalQuadrants signals={index?.signalLayers} />
-
-              {/* Signal tensions */}
-              <TensionPanel tensions={index?.tensions ?? []} />
-
-              {/* AI Briefing */}
-              <AIBriefing narrative={index?.narrative} />
 
               {/* Category cards + Top markets side-by-side */}
               <div className="grid gap-6 lg:grid-cols-3">

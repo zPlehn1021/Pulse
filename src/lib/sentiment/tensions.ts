@@ -32,17 +32,16 @@ export function detectTensions(input: TensionInput): SignalTension[] {
   const pm = signalLayers.predictionMarkets;
 
   // --- Rule 1: Markets bearish but consumers still confident ---
-  // Prediction markets shifting negative while consumer sentiment is still high
   if (
-    pm.momentum < -15 &&
+    pm.momentum < -10 &&
     ep.consumerSentiment !== null &&
-    ep.consumerSentiment > 65 &&
-    ep.confidence > 30
+    ep.consumerSentiment > 60 &&
+    ep.confidence > 20
   ) {
     tensions.push({
       description:
-        `Prediction markets shifting pessimistic (momentum ${pm.momentum}) but consumer sentiment remains elevated at ${ep.consumerSentiment}`,
-      severity: ep.consumerSentiment > 80 ? "high" : "medium",
+        `Prediction markets shifting pessimistic (momentum ${pm.momentum}) but consumer sentiment remains at ${ep.consumerSentiment} — informed bettors are souring on the future while ordinary people still feel OK`,
+      severity: ep.consumerSentiment > 75 ? "high" : "medium",
       layers: ["predictionMarkets", "economicPsychology"],
       category: "cross-category",
       implication: null,
@@ -51,15 +50,16 @@ export function detectTensions(input: TensionInput): SignalTension[] {
 
   // --- Rule 2: Markets bullish but consumers pessimistic ---
   if (
-    pm.momentum > 15 &&
+    pm.momentum > 10 &&
     ep.consumerSentiment !== null &&
-    ep.consumerSentiment < 55 &&
-    ep.confidence > 30
+    ep.consumerSentiment < 60 &&
+    ep.confidence > 20
   ) {
+    const gap = pm.momentum - ep.consumerSentiment;
     tensions.push({
       description:
-        `Prediction markets are optimistic (momentum +${pm.momentum}) but consumer sentiment is depressed at ${ep.consumerSentiment}`,
-      severity: ep.consumerSentiment < 45 ? "high" : "medium",
+        `Prediction markets are optimistic (momentum +${pm.momentum}) but consumer sentiment is depressed at ${ep.consumerSentiment} — bettors see a better future than ordinary consumers feel right now`,
+      severity: ep.consumerSentiment < 50 ? "high" : "medium",
       layers: ["predictionMarkets", "economicPsychology"],
       category: "cross-category",
       implication: null,
@@ -68,14 +68,14 @@ export function detectTensions(input: TensionInput): SignalTension[] {
 
   // --- Rule 3: Fear signals elevated but prediction markets calm ---
   if (
-    fs.composite > 60 &&
-    Math.abs(pm.momentum) < 10 &&
-    fs.confidence > 30
+    fs.composite > 40 &&
+    Math.abs(pm.momentum) < 15 &&
+    fs.confidence > 20
   ) {
     tensions.push({
       description:
-        `Fear indicators elevated (composite ${fs.composite}/100, VIX ${fs.vix ?? "N/A"}) but prediction markets show no strong directional move`,
-      severity: fs.composite > 75 ? "high" : "medium",
+        `Fear indicators are elevated (composite ${fs.composite}/100, VIX at ${fs.vix ?? "N/A"}) but prediction market sentiment is relatively calm — financial anxiety hasn't translated into changed beliefs about outcomes`,
+      severity: fs.composite > 65 ? "high" : "medium",
       layers: ["fearSignals", "predictionMarkets"],
       category: "cross-category",
       implication: null,
@@ -84,29 +84,28 @@ export function detectTensions(input: TensionInput): SignalTension[] {
 
   // --- Rule 4: Fear signals calm but markets volatile ---
   if (
-    fs.composite < 30 &&
-    Math.abs(pm.momentum) > 25 &&
-    fs.confidence > 30
+    fs.composite < 35 &&
+    Math.abs(pm.momentum) > 20 &&
+    fs.confidence > 20
   ) {
     tensions.push({
       description:
-        `Fear indicators calm (composite ${fs.composite}/100) but prediction markets are moving sharply (momentum ${pm.momentum})`,
-      severity: Math.abs(pm.momentum) > 40 ? "high" : "medium",
+        `Fear indicators are calm (composite ${fs.composite}/100) but prediction markets are shifting sharply (momentum ${pm.momentum}) — bettors are repositioning without traditional fear signals triggering`,
+      severity: Math.abs(pm.momentum) > 35 ? "high" : "medium",
       layers: ["fearSignals", "predictionMarkets"],
       category: "cross-category",
       implication: null,
     });
   }
 
-  // --- Rule 5: High attention-market gap ---
-  // Public is either way more or way less aware than market activity suggests
-  if (attn.attentionMarketGap > 40 && attn.confidence > 20) {
+  // --- Rule 5: Attention-market gap ---
+  if (attn.attentionMarketGap >= 30 && attn.confidence > 10) {
     const publicHigher = attn.publicAwareness > overallActivity;
     tensions.push({
       description: publicHigher
-        ? `Public search interest (${attn.publicAwareness}) far exceeds prediction market engagement (${overallActivity}) — public may be reacting to headlines without informed positioning`
-        : `Prediction market activity (${overallActivity}) far exceeds public awareness (${attn.publicAwareness}) — informed bettors may see something the public hasn't noticed`,
-      severity: attn.attentionMarketGap > 60 ? "high" : "medium",
+        ? `Public search interest (${attn.publicAwareness}/100) far exceeds prediction market activity (${overallActivity}/100) — the public is reacting to headlines without informed bettors matching that concern`
+        : `Prediction market activity (${overallActivity}/100) far exceeds public search interest (${attn.publicAwareness}/100) — informed bettors may be pricing in scenarios the public hasn't noticed yet`,
+      severity: attn.attentionMarketGap > 50 ? "high" : "medium",
       layers: ["attention", "predictionMarkets"],
       category: "cross-category",
       implication: null,
@@ -116,12 +115,12 @@ export function detectTensions(input: TensionInput): SignalTension[] {
   // --- Rule 6: Yield curve inverted but markets optimistic ---
   if (
     fs.yieldCurveInverted &&
-    pm.momentum > 10 &&
-    fs.confidence > 30
+    pm.momentum > 5 &&
+    fs.confidence > 20
   ) {
     tensions.push({
       description:
-        `Yield curve inverted (spread ${fs.yieldCurveSpread}%) — historically the strongest recession predictor — but prediction markets are optimistic (momentum +${pm.momentum})`,
+        `Yield curve inverted (spread ${fs.yieldCurveSpread}%) — historically the strongest recession predictor — but prediction markets are optimistic (momentum +${pm.momentum}). One of these signals will prove wrong.`,
       severity: "high",
       layers: ["fearSignals", "predictionMarkets"],
       category: "finance",
@@ -133,11 +132,11 @@ export function detectTensions(input: TensionInput): SignalTension[] {
   if (
     ep.consumerSentimentTrend === "falling" &&
     ep.retailSalesTrend === "rising" &&
-    ep.confidence > 40
+    ep.confidence > 20
   ) {
     tensions.push({
       description:
-        `Consumer sentiment is declining but retail sales are still rising — people say they're worried but haven't changed spending behavior yet`,
+        `Consumer sentiment is declining but retail sales are still rising — people say they're worried but haven't changed spending behavior. Historically this gap closes: either mood improves or wallets snap shut.`,
       severity: "medium",
       layers: ["economicPsychology"],
       category: "finance",
@@ -145,17 +144,16 @@ export function detectTensions(input: TensionInput): SignalTension[] {
     });
   }
 
-  // --- Rule 8: Rising unemployment signals but low public attention ---
+  // --- Rule 8: Rising jobless claims but low public attention ---
   if (
     ep.joblessClaimsTrend === "rising" &&
-    attn.publicAwareness < 30 &&
-    ep.confidence > 30 &&
-    attn.confidence > 20
+    attn.publicAwareness < 45 &&
+    ep.confidence > 20
   ) {
     tensions.push({
       description:
-        `Jobless claims trending upward but public search interest is low (${attn.publicAwareness}/100) — labor market stress may not yet be on the public's radar`,
-      severity: "medium",
+        `Jobless claims are trending upward but public search interest is only ${attn.publicAwareness}/100 — labor market stress may be building below the radar of public awareness`,
+      severity: attn.publicAwareness < 25 ? "high" : "medium",
       layers: ["economicPsychology", "attention"],
       category: "finance",
       implication: null,
@@ -163,16 +161,15 @@ export function detectTensions(input: TensionInput): SignalTension[] {
   }
 
   // --- Rule 9: VIX elevated + yield curve inverted = double fear signal ---
-  // Not a tension per se, but a notable signal concordance worth surfacing
   if (
     fs.vix !== null &&
-    fs.vixLevel === "elevated" &&
+    (fs.vixLevel === "elevated" || fs.vixLevel === "extreme") &&
     fs.yieldCurveInverted &&
-    fs.confidence > 40
+    fs.confidence > 20
   ) {
     tensions.push({
       description:
-        `Double fear signal: VIX elevated at ${fs.vix} AND yield curve inverted at ${fs.yieldCurveSpread}% — both indicators pointing to stress simultaneously`,
+        `Double fear signal: VIX elevated at ${fs.vix} AND yield curve inverted at ${fs.yieldCurveSpread}% — both short-term anxiety and long-term recession indicators pointing to stress simultaneously`,
       severity: "high",
       layers: ["fearSignals"],
       category: "cross-category",
@@ -185,14 +182,102 @@ export function detectTensions(input: TensionInput): SignalTension[] {
     fs.vix !== null &&
     fs.vixLevel === "extreme" &&
     ep.consumerSentimentTrend === "stable" &&
-    ep.confidence > 30
+    ep.confidence > 20
   ) {
     tensions.push({
       description:
-        `VIX at extreme levels (${fs.vix}) indicating acute market fear, but consumer sentiment hasn't moved — the public may not yet feel what financial markets are pricing`,
+        `VIX at extreme levels (${fs.vix}) indicating acute market fear, but consumer sentiment hasn't moved — the public hasn't yet absorbed what financial markets are pricing`,
       severity: "high",
       layers: ["fearSignals", "economicPsychology"],
       category: "cross-category",
+      implication: null,
+    });
+  }
+
+  // --- Rule 11: Elevated VIX but consumer sentiment stable (milder version of 10) ---
+  if (
+    fs.vix !== null &&
+    fs.vixLevel === "elevated" &&
+    ep.consumerSentimentTrend === "stable" &&
+    ep.consumerSentiment !== null &&
+    ep.consumerSentiment < 65 &&
+    ep.confidence > 20
+  ) {
+    tensions.push({
+      description:
+        `VIX elevated at ${fs.vix} signaling Wall Street anxiety, but consumer sentiment sits flat at ${ep.consumerSentiment} — financial markets sense risk that hasn't filtered down to how people feel about their own economic situation`,
+      severity: "medium",
+      layers: ["fearSignals", "economicPsychology"],
+      category: "cross-category",
+      implication: null,
+    });
+  }
+
+  // --- Rule 12: Low savings rate + rising fear ---
+  if (
+    ep.savingsRate !== null &&
+    ep.savingsRate < 5 &&
+    fs.composite > 35 &&
+    ep.confidence > 20
+  ) {
+    tensions.push({
+      description:
+        `Personal savings rate is low at ${ep.savingsRate}% while fear signals are elevated (composite ${fs.composite}/100) — consumers have limited financial cushion during a period of rising anxiety`,
+      severity: ep.savingsRate < 3.5 ? "high" : "medium",
+      layers: ["economicPsychology", "fearSignals"],
+      category: "finance",
+      implication: null,
+    });
+  }
+
+  // --- Rule 13: Gold rising + markets optimistic = hedging disconnect ---
+  if (
+    fs.goldTrend === "rising" &&
+    pm.momentum > 15 &&
+    fs.confidence > 20
+  ) {
+    tensions.push({
+      description:
+        `Commodity markets show flight-to-safety behavior (gold rising) but prediction markets are optimistic (momentum +${pm.momentum}) — smart money is hedging even as collective belief leans positive`,
+      severity: "medium",
+      layers: ["fearSignals", "predictionMarkets"],
+      category: "finance",
+      implication: null,
+    });
+  }
+
+  // --- Rule 14: Unemployment rising + markets optimistic ---
+  if (
+    ep.unemploymentRate !== null &&
+    ep.unemploymentRate > 4 &&
+    ep.joblessClaimsTrend === "rising" &&
+    pm.momentum > 15 &&
+    ep.confidence > 20
+  ) {
+    tensions.push({
+      description:
+        `Unemployment at ${ep.unemploymentRate}% with jobless claims rising, yet prediction market sentiment is optimistic (momentum +${pm.momentum}) — labor market deterioration hasn't shaken collective confidence about the future`,
+      severity: ep.unemploymentRate > 5 ? "high" : "medium",
+      layers: ["economicPsychology", "predictionMarkets"],
+      category: "cross-category",
+      implication: null,
+    });
+  }
+
+  // --- Rule 15: Yield curve nearly flat + stable sentiment = complacency risk ---
+  if (
+    fs.yieldCurveSpread !== null &&
+    fs.yieldCurveSpread < 0.6 &&
+    fs.yieldCurveSpread > -0.1 &&
+    ep.consumerSentimentTrend === "stable" &&
+    fs.confidence > 20
+  ) {
+    tensions.push({
+      description:
+        `Yield curve nearly flat at ${fs.yieldCurveSpread}% (approaching inversion territory) while consumer sentiment is stable — historically, this quiet period before inversion is when complacency is highest`,
+      severity: fs.yieldCurveSpread < 0.3 ? "high" : "medium",
+      layers: ["fearSignals", "economicPsychology"],
+      category: "finance",
       implication: null,
     });
   }

@@ -4,8 +4,16 @@ import useSWR from "swr";
 import { useRef } from "react";
 import type { CompositeIndex } from "@/lib/platforms/types";
 
+export interface KeyInsight {
+  headline: string;
+  detail: string;
+  layers: string[];
+  sentiment: "positive" | "negative" | "mixed" | "neutral";
+}
+
 interface SentimentResponse {
   index: CompositeIndex;
+  keyInsights: KeyInsight[];
   history: CompositeIndex[];
   fearGreed: { current: unknown; history: unknown[] } | null;
   platformStatus: Record<
@@ -56,6 +64,7 @@ export function useSentiment() {
 
   return {
     index: effective?.index ?? null,
+    keyInsights: effective?.keyInsights ?? [],
     history: effective?.history ?? [],
     fearGreed: effective?.fearGreed ?? null,
     platformStatus: effective?.platformStatus ?? {},
