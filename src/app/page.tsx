@@ -10,13 +10,15 @@ import { DivergencePanel } from "@/components/dashboard/DivergencePanel";
 import { GlobalTopMarkets } from "@/components/dashboard/GlobalTopMarkets";
 import { SignalDeepDive } from "@/components/dashboard/SignalDeepDive";
 import { TrackRecord } from "@/components/dashboard/TrackRecord";
+import { HistoricalCharts } from "@/components/dashboard/HistoricalCharts";
 import type { CategoryId } from "@/lib/platforms/types";
 
-type Tab = "dashboard" | "signals" | "track-record" | "sources" | "business";
+type Tab = "dashboard" | "signals" | "history" | "track-record" | "sources" | "business";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
   { id: "signals", label: "Signal Deep-Dive" },
+  { id: "history", label: "Historical" },
   { id: "track-record", label: "Track Record" },
   { id: "sources", label: "Sources" },
   { id: "business", label: "Business Model" },
@@ -126,6 +128,7 @@ export default function Home() {
       )}
 
       {activeTab === "signals" && <SignalDeepDive />}
+      {activeTab === "history" && <HistoricalCharts />}
       {activeTab === "track-record" && <TrackRecord />}
       {activeTab === "sources" && <SourcesPlaceholder />}
       {activeTab === "business" && <BusinessModelPlaceholder />}
