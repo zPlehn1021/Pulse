@@ -35,13 +35,18 @@ async function classifyBatch(
     .map((m, i) => `${i + 1}. "${m.question}"`)
     .join("\n");
 
-  const prompt = `Classify each prediction market question for societal sentiment direction.
+  const prompt = `Classify each prediction market question for societal sentiment direction. Think about what a YES outcome would mean for society's mood and trajectory.
 
 For each question, reply with exactly one word: positive, negative, or neutral.
 
-- positive: higher probability = society is doing better (economic growth, peace, stability, progress)
-- negative: higher probability = society is doing worse (recession, war, disaster, decline)
-- neutral: direction is ambiguous or not sentiment-relevant (elections, policy changes that could go either way)
+- positive: YES outcome = optimistic signal (economic growth, peace, markets up, innovation, de-escalation, prosperity, stability)
+  Examples: "Will S&P 500 close higher this month?" → positive. "Will SpaceX IPO?" → positive. "US-Iran ceasefire?" → positive.
+- negative: YES outcome = pessimistic signal (recession, war, market crash, unemployment rising, conflict, crisis, instability)
+  Examples: "Will unemployment exceed 5%?" → negative. "US forces enter Iran?" → negative. "Will there be a recession?" → negative.
+- neutral: ONLY use for questions where YES has no meaningful societal sentiment direction (pure entertainment, sports scores, celebrity gossip with no broader implications, ambiguous political outcomes)
+  Examples: "Which team wins the Super Bowl?" → neutral. "Will it rain in NYC on Tuesday?" → neutral.
+
+IMPORTANT: Most prediction market questions DO have a sentiment direction. Lean toward positive or negative. Reserve neutral for truly ambiguous cases. Financial markets going up = positive. Wars/conflicts = negative. Policy that clearly helps/hurts economy = positive/negative.
 
 Questions:
 ${numbered}
@@ -75,6 +80,10 @@ Reply with ONLY a numbered list of classifications, one per line. Example format
     }
   }
 
+  if (results.length === 0 && markets.length > 0) {
+    console.error(`[classify] Parsed 0 results from ${lines.length} lines for ${markets.length} markets. First 200 chars of response: ${text.text.slice(0, 200)}`);
+  }
+
   return results;
 }
 
@@ -89,8 +98,8 @@ export async function classifyNewMarkets(): Promise<number> {
   const unclassified = getUnclassifiedMarkets();
   if (unclassified.length === 0) return 0;
 
-  const BATCH_SIZE = 50;
-  const MAX_PER_CYCLE = 100; // Cap total classifications per cron cycle to limit API usage
+  const BATCH_SIZE = 20;
+  const MAX_PER_CYCLE = 200; // Cap total classifications per cron cycle to limit API usage
   const toProcess = unclassified.slice(0, MAX_PER_CYCLE);
   let totalClassified = 0;
 

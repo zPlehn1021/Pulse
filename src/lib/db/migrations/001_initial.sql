@@ -42,11 +42,12 @@ CREATE TABLE IF NOT EXISTS divergence_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   snapshot_id INTEGER REFERENCES snapshots(id),
   category TEXT,
+  question TEXT,
   spread REAL,
   high_platform TEXT,
-  high_score REAL,
+  high_price REAL,
   low_platform TEXT,
-  low_score REAL
+  low_price REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON snapshots(timestamp);

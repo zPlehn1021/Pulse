@@ -21,6 +21,7 @@ interface PredictItContract {
   bestBuyNoCost: number | null;
   bestSellYesCost: number | null;
   bestSellNoCost: number | null;
+  dateEnd: string | null;
 }
 
 interface PredictItMarket {
@@ -56,6 +57,7 @@ function toNormalized(
     liquidity: 0,
     lastUpdated: new Date(market.timeStamp),
     sourceUrl: market.url,
+    closeDate: contract.dateEnd && !isNaN(new Date(contract.dateEnd).getTime()) ? new Date(contract.dateEnd) : null,
   };
 }
 

@@ -43,6 +43,21 @@ function runMigrations(db: Database.Database): void {
   if (!columnNames.includes("close_date")) {
     db.exec("ALTER TABLE markets ADD COLUMN close_date TEXT");
   }
+
+  // v2: Rename divergence_log columns from high_score/low_score to high_price/low_price
+  // and add question column
+  const divColumns = db.prepare("PRAGMA table_info(divergence_log)").all() as { name: string }[];
+  const divColumnNames = divColumns.map((c) => c.name);
+
+  if (divColumnNames.includes("high_score")) {
+    db.exec("ALTER TABLE divergence_log RENAME COLUMN high_score TO high_price");
+  }
+  if (divColumnNames.includes("low_score")) {
+    db.exec("ALTER TABLE divergence_log RENAME COLUMN low_score TO low_price");
+  }
+  if (!divColumnNames.includes("question")) {
+    db.exec("ALTER TABLE divergence_log ADD COLUMN question TEXT");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +101,7 @@ export function upsertMarkets(markets: NormalizedMarket[]): void {
         lastUpdated: m.lastUpdated.toISOString(),
         sourceUrl: m.sourceUrl,
         resolution: m.resolution ?? null,
-        closeDate: m.closeDate ? m.closeDate.toISOString() : null,
+        closeDate: m.closeDate && !isNaN(m.closeDate.getTime()) ? m.closeDate.toISOString() : null,
       });
     }
   });
@@ -695,8 +710,10 @@ export function getNewlyResolvedMarkets(): {
 }[] {
   const db = getDb();
   return db.prepare(`
-    SELECT m.id, m.platform, m.question, m.category, m.yes_price,
-           m.resolution, m.sentiment_direction
+    SELECT m.id, m.platform, m.question, m.category,
+           m.yes_price AS yesPrice,
+           m.resolution,
+           m.sentiment_direction AS sentimentDirection
     FROM markets m
     WHERE m.resolution IN ('yes', 'no')
       AND NOT EXISTS (
@@ -909,11 +926,12 @@ interface CategorySnapshotRow {
 
 interface DivergenceRow {
   category: string;
+  question: string | null;
   spread: number;
   high_platform: string;
-  high_score: number;
+  high_price: number;
   low_platform: string;
-  low_score: number;
+  low_price: number;
 }
 
 export function saveSnapshot(index: CompositeIndex): number {
@@ -934,9 +952,9 @@ export function saveSnapshot(index: CompositeIndex): number {
 
   const insertDivergence = db.prepare(`
     INSERT INTO divergence_log
-      (snapshot_id, category, spread, high_platform, high_score,
-       low_platform, low_score)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (snapshot_id, category, question, spread, high_platform, high_price,
+       low_platform, low_price)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const run = db.transaction(() => {
@@ -966,6 +984,7 @@ export function saveSnapshot(index: CompositeIndex): number {
       insertDivergence.run(
         snapshotId,
         div.category,
+        div.question,
         div.spread,
         div.highPlatform,
         div.highPrice,
@@ -1002,12 +1021,12 @@ function hydrateSnapshot(
 
   const divergences: Divergence[] = divRows.map((d) => ({
     category: d.category as CategoryId,
-    question: "",
+    question: d.question ?? "",
     spread: d.spread,
     highPlatform: d.high_platform as Platform,
-    highPrice: d.high_score,
+    highPrice: d.high_price,
     lowPlatform: d.low_platform as Platform,
-    lowPrice: d.low_score,
+    lowPrice: d.low_price,
   }));
 
   return {

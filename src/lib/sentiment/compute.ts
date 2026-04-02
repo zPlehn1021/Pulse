@@ -132,10 +132,10 @@ function isPastExpiration(m: NormalizedMarket): boolean {
 
 /**
  * Check if a market has effectively converged (price near 0 or 1).
- * Markets at >97% or <3% are essentially resolved and create noise.
+ * Markets at >98% or <2% are essentially resolved and create noise.
  */
-function isConverged(m: NormalizedMarket, threshold = 0.97): boolean {
-  return m.yesPrice >= threshold || m.yesPrice <= (1 - threshold);
+function isConverged(m: NormalizedMarket, threshold = 0.98): boolean {
+  return m.yesPrice > threshold || m.yesPrice < (1 - threshold);
 }
 
 export function computeCategoryAnalysis(
@@ -148,7 +148,7 @@ export function computeCategoryAnalysis(
       m.resolution === undefined &&
       !isPastExpiration(m) &&    // Exclude expired-but-unresolved markets
       !isNearExpiration(m) &&    // Exclude markets within 48h of close
-      !isConverged(m),           // Exclude effectively resolved markets (>97% or <3%)
+      !isConverged(m),           // Exclude effectively resolved markets (>98% or <2%)
   );
 
   // Fetch price history from DB for this category
@@ -288,8 +288,17 @@ export function computeCompositeIndex(
       ? Math.round(actTotal / activeCats.length)
       : 0;
 
+  // Filter out near-expired and converged markets before cross-platform matching
+  const activeMarkets = allMarkets.filter(
+    (m) =>
+      m.resolution === undefined &&
+      !isPastExpiration(m) &&
+      !isNearExpiration(m) &&
+      !isConverged(m),
+  );
+
   // Cross-platform divergences (real matches)
-  const divergences = matchMarketsAcrossPlatforms(allMarkets);
+  const divergences = matchMarketsAcrossPlatforms(activeMarkets);
 
   // Fill in consensus scores from matches
   for (const cat of categories) {

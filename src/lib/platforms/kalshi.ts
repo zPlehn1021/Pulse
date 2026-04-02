@@ -71,7 +71,7 @@ function toNormalized(
       market.result === "no" ? "no" :
       market.status !== "open" ? null :
       undefined,
-    closeDate: market.close_time ? new Date(market.close_time) : null,
+    closeDate: market.close_time && !isNaN(new Date(market.close_time).getTime()) ? new Date(market.close_time) : null,
   };
 }
 

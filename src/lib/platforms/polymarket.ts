@@ -42,7 +42,7 @@ function toNormalized(
     lastUpdated: new Date(),
     sourceUrl: `https://polymarket.com/event/${raw.slug}`,
     resolution: raw.closed ? null : undefined,
-    closeDate: raw.endDate ? new Date(raw.endDate) : null,
+    closeDate: raw.endDate && !isNaN(new Date(raw.endDate).getTime()) ? new Date(raw.endDate) : null,
   };
 }
 
